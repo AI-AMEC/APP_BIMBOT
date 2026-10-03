@@ -1,0 +1,784 @@
+<div id="view-project-details" class="hidden max-w-[1600px] mx-auto p-4 md:p-6 space-y-4 relative">
+    
+    <!-- CUSTOM RESET SORT MODAL -->
+    <div id="reset-sort-modal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm transition-opacity">
+        <div class="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4 border border-slate-200 transform scale-100 transition-transform">
+            <div class="flex items-center gap-3 mb-3">
+                <div class="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 shrink-0">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                </div>
+                <h3 class="text-lg font-bold text-slate-900">איפוס מיון הטבלה?</h3>
+            </div>
+            <p class="text-sm text-slate-500 mb-6 pl-13">לאפס את מיון הטבלה? כל המודלים יוחזרו לסדר ברירת המחדל לפי תחום.</p>
+            <div class="flex justify-end gap-3">
+                <button type="button" onclick="closeResetModal()" class="px-4 py-2 text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition">ביטול</button>
+                <button type="button" onclick="confirmResetSort()" class="px-4 py-2 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition shadow-sm">כן, אפס מיון</button>
+            </div>
+        </div>
+    </div>
+    <!-- END MODAL -->
+
+    <div dir="rtl" class="flex items-center gap-4 mb-2">
+        <button onclick="showView('dashboard')" class="bg-white border border-slate-200 hover:bg-slate-50 text-slate-600 p-1.5 rounded-lg transition shadow-sm" title="חזרה ללוח הבקרה">
+            <svg class="w-5 h-5 -scale-x-100" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+        </button>
+        <div>
+            <h2 class="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-3">
+                <span id="details-prj-title">שם הפרויקט</span>
+                <div id="info-prj-status"></div>
+            </h2>
+            <p class="text-xs text-slate-500 font-mono mt-0.5 font-semibold flex items-center gap-2">
+                <span class="text-slate-400">פרויקט</span> / <span id="details-prj-subtitle" class="font-bold text-slate-600">מזהה</span>
+            </p>
+        </div>
+    </div>
+
+    <?!= include('View_CloudConnection'); ?>
+
+    <nav class="flex flex-wrap border-b border-slate-200 mb-4 gap-x-5 gap-y-2 px-2" id="main-nav">
+      <button id="tab-btn-home" onclick="switchTab('home')" class="pb-2 text-sm font-bold text-blue-600 border-b-2 border-blue-600 transition">דף הפרויקט הראשי</button>
+      <button id="tab-btn-bim-info" onclick="switchTab('bim-info')" class="pb-2 text-sm font-semibold text-slate-500 hover:text-slate-800 border-b-2 border-transparent transition">פרטי פרויקט</button>
+      <button id="tab-btn-mdc" onclick="switchTab('mdc')" class="pb-2 text-sm font-semibold text-slate-500 hover:text-slate-800 border-b-2 border-transparent transition">מבנה הפרויקט והמודלים</button>
+      <button id="tab-btn-architecture-kickoff" onclick="switchTab('architecture-kickoff')" class="pb-2 text-sm font-semibold text-slate-500 hover:text-slate-800 border-b-2 border-transparent transition">פגישת התנעה אדריכלית</button>
+      <button id="tab-btn-consultant-kickoff" onclick="switchTab('consultant-kickoff')" class="pb-2 text-sm font-semibold text-slate-500 hover:text-slate-800 border-b-2 border-transparent transition">התנעת יועצים</button>
+      <button id="tab-btn-contacts" onclick="switchTab('contacts')" class="pb-2 text-sm font-semibold text-slate-500 hover:text-slate-800 border-b-2 border-transparent transition">אנשי קשר</button>
+      <button id="tab-btn-publish" onclick="switchTab('publish')" class="pb-2 text-sm font-semibold text-slate-500 hover:text-slate-800 border-b-2 border-transparent transition">בקרת Publish</button>
+      <button id="tab-btn-cloud-issues" onclick="switchTab('cloud-issues')" class="pb-2 text-sm font-semibold text-slate-500 hover:text-slate-800 border-b-2 border-transparent transition">Issues</button>
+      <button id="tab-btn-kickoff" onclick="switchTab('kickoff')" class="pb-2 text-sm font-semibold text-slate-500 hover:text-slate-800 border-b-2 border-transparent transition">ספריית מסמכים</button>
+      <button id="tab-btn-db" onclick="switchTab('db')" class="hidden pb-2 text-sm font-semibold text-slate-500 hover:text-slate-800 border-b-2 border-transparent transition">מקורות ושמירה</button>
+    </nav>
+
+    <!-- Project overview: all phase decisions remain visible in a single table. -->
+    <section id="tab-content-home" class="hidden space-y-3" dir="rtl">
+      <div id="home-project-summary" class="rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <div class="flex flex-wrap items-center justify-between gap-2"><h2 class="text-sm font-bold text-slate-800">ציר הפרויקט</h2><span id="home-phase-status" class="text-xs text-slate-600">טוען שלב…</span></div>
+        <div id="home-phase-timeline" role="tablist" aria-label="שלבי הפרויקט"></div>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white overflow-hidden">
+        <div class="flex flex-wrap justify-between items-center gap-3 px-4 py-3 border-b border-slate-100">
+          <div><h2 class="text-base font-bold text-slate-900">מצב העבודה בכל השלבים</h2><p class="text-xs text-slate-500 mt-1">מצבי התהליכים מוצגים יחד. השלמה נקבעת בהחלטת מנהל ועם ראיה.</p></div>
+          <div class="flex flex-wrap items-center gap-2"><label class="text-xs font-semibold text-slate-600" for="home-stage-select">השלב הנוכחי</label><select id="home-stage-select" onchange="onWorkflowStageChange(this.value)" class="text-sm rounded-lg border border-slate-200 px-2 py-1"><option value="UNSET">טרם נקבע</option><option value="INITIAL">תכנון ראשוני</option><option value="FINAL">תכנון סופי / מכרז</option><option value="DETAILED">תכנון מפורט</option></select><button type="button" id="home-workflow-save" onclick="saveProjectWorkflowFromHome()" class="rounded-lg bg-blue-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">שמירת החלטות</button></div>
+        </div>
+        <div id="home-workflow-message" class="px-4 py-2 text-xs text-slate-500" role="status"></div>
+        <div id="home-decisions-dirty" class="hidden px-4 py-2 text-xs font-semibold text-amber-700 bg-amber-50">יש החלטות שלא נשמרו. הנתונים בטבלה כוללים את השינויים שלך.</div>
+        <div class="overflow-x-auto"><table id="home-workflow-table" class="w-full text-right"><caption class="sr-only">מצב תהליכי העבודה בכל שלבי הפרויקט</caption><thead><tr><th scope="col">שלב</th><th scope="col">תהליך / תוצר</th><th scope="col">מצב</th><th scope="col">ראיה / הערה</th><th scope="col">עודכן</th><th scope="col">פעולה</th></tr></thead><tbody id="home-task-list"></tbody></table></div>
+        <div class="px-4 py-2 border-t border-slate-100 flex flex-wrap justify-between gap-2 text-xs text-slate-500"><span id="home-workflow-meta"></span><span>הנתונים הם החלטות הפרויקט; אינם השלמה אוטומטית מנתוני ACC.</span></div>
+      </div>
+    </section>
+    <!-- BIM INFO TAB -->
+    <section id="tab-content-bim-info" class="block relative" dir="rtl">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-4 items-start">
+            <div class="bg-white rounded-xl shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100 flex flex-col h-full">
+                <div class="px-4 py-3 border-b border-slate-50 bg-white">
+                    <h3 class="font-bold text-blue-700 text-sm tracking-wide">פרטי פרויקט</h3>
+                </div>
+                <div class="p-6 flex flex-col gap-6">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="text-xs font-semibold text-slate-400 block mb-1">מזהה פרויקט</label>
+                            <div class="font-bold text-slate-900 text-base truncate" id="info-prj-no">-</div>
+                        </div>
+                        <div>
+                            <label class="text-xs font-semibold text-slate-400 block mb-1">שם הפרויקט</label>
+                            <div class="font-bold text-slate-900 text-base truncate" id="info-prj-name">-</div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="text-xs font-semibold text-slate-400 block mb-1">קוד פרויקט (לדוגמה: 1234)</label>
+                            <div class="relative">
+                                <input type="text" id="info-prj-code" oninput="saveLocalState()" class="w-full text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg pl-3 pr-8 py-2.5 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm" placeholder="...">
+                                <svg class="w-3.5 h-3.5 text-slate-400 absolute right-3 top-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-xs font-semibold text-slate-400 block mb-1">ישיבה שבועית</label>
+                            <div class="flex gap-2">
+                                <select id="info-weekly-day" onchange="saveLocalState()" class="w-1/2 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-2.5 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm">
+                                    <option value="">יום</option>
+                                    <option value="Sunday">יום ראשון</option>
+                                    <option value="Monday">יום שני</option>
+                                    <option value="Tuesday">יום שלישי</option>
+                                    <option value="Wednesday">יום רביעי</option>
+                                    <option value="Thursday">יום חמישי</option>
+                                </select>
+                                <select id="info-weekly-time" onchange="saveLocalState()" class="w-1/2 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-2.5 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm">
+                                    <option value="">שעה</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 mt-auto">
+                        <div>
+                            <label class="text-xs font-semibold text-slate-400 block mb-1">פלטפורמת BIM</label>
+                            <select id="info-bim-platform" onchange="saveLocalState()" class="w-full text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm"><option value="">בחר פלטפורמה...</option></select>
+                        </div>
+                        <div>
+                            <label class="text-xs font-semibold text-slate-400 block mb-1">גרסת Revit</label>
+                            <select id="info-revit-ver" onchange="saveLocalState()" class="w-full text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm"><option value="">בחר גרסה...</option></select>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="text-xs font-semibold text-slate-400 block mb-1">שיטת עבודה Live / Shared :</label>
+                            <div class="flex gap-2 h-[42px]">
+                               <label class="cursor-pointer flex-1">
+                                  <input type="radio" name="kick-live-shared" value="Live" class="peer sr-only" onchange="saveLocalState()">
+                                  <div class="h-full flex items-center justify-center rounded-lg border border-slate-200 peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">Live</div>
+                               </label>
+                               <label class="cursor-pointer flex-1">
+                                  <input type="radio" name="kick-live-shared" value="Shared" class="peer sr-only" onchange="saveLocalState()">
+                                  <div class="h-full flex items-center justify-center rounded-lg border border-slate-200 peer-checked:bg-slate-700 peer-checked:text-white peer-checked:border-slate-700 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">Shared</div>
+                               </label>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-xs font-semibold text-slate-400 block mb-1">0.00 פרויקטלי</label>
+                            <input type="number" step="any" id="kick-gl-level" oninput="saveLocalState()" class="w-full h-[42px] text-sm font-bold text-slate-800 bg-white border border-slate-200 rounded-lg px-3 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm" placeholder="0.00">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100 flex flex-col h-full">
+                <div class="px-4 py-3 border-b border-slate-50 bg-white">
+                    <h3 class="font-bold text-blue-700 text-sm tracking-wide">קישורים לסביבת העבודה</h3>
+                </div>
+                <div class="p-6 flex flex-col gap-4">
+                    <div class="flex items-center gap-3">
+                        <div class="w-32 shrink-0 text-xs font-semibold text-slate-400">תיקיית מסמכים</div>
+                        <input type="text" id="info-drive-link" oninput="updateLinkButtons(); saveLocalState()" class="flex-1 min-w-0 text-xs font-medium text-slate-500 bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-2 py-2.5 outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="https://drive.google.com/drive/folders/...">
+                        <button type="button" id="btn-drive-link" onclick="openWorkspaceLink('info-drive-link')" class="flex items-center justify-center w-9 h-9 bg-white border border-slate-200 rounded-lg text-emerald-600 hover:bg-emerald-50 transition shadow-sm shrink-0"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg></button>
+                        <div class="w-48 border border-slate-200 rounded-lg px-3 py-2.5 bg-white text-sm font-bold text-slate-700 flex items-center shrink-0 shadow-sm">Google Drive</div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="w-32 shrink-0 text-xs font-semibold text-slate-400">HUB:</div>
+                        <input type="text" id="info-hub-link" oninput="saveLocalState()" class="flex-1 min-w-0 text-xs font-medium text-slate-500 bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-2 py-2.5 outline-none disabled:bg-slate-50 disabled:text-slate-400 transition" placeholder="...">
+                        <div class="w-9 h-9 shrink-0"></div>
+                        <div class="w-48 border border-slate-200 rounded-lg px-3 py-2 text-sm flex items-center justify-between bg-white shrink-0 shadow-sm">
+                            <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" id="info-hub-checkbox" onchange="handleHubCheckbox()" checked class="w-3.5 h-3.5 text-blue-600 rounded cursor-pointer border-slate-300"><span class="font-bold text-slate-700">AMEC</span></label>
+                            <button type="button" class="text-blue-600 hover:text-blue-800 font-semibold text-xs flex items-center gap-1" onclick="enableHubInput()"><svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg> עריכה</button>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <div class="w-32 shrink-0 text-xs font-semibold text-slate-400">פלטפורמת CDE</div>
+                        <input type="text" id="info-acc-link" oninput="updateLinkButtons(); saveLocalState(); if (typeof apsRenderLinkStatus === 'function') apsRenderLinkStatus();"class="flex-1 min-w-0 text-xs font-medium text-slate-500 bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-2 py-2.5 outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="https://...">
+                        <button type="button" id="btn-acc-link" onclick="openWorkspaceLink('info-acc-link')" class="flex items-center justify-center w-9 h-9 bg-white border border-slate-200 rounded-lg text-blue-500 hover:bg-blue-50 transition shadow-sm shrink-0"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg></button>
+                        <div class="w-48 shrink-0"><select id="info-cde-platform" onchange="saveLocalState()" class="w-full text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-2.5 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm"><option value="">בחר פלטפורמה...</option></select></div>
+                    </div>
+                    <div id="aps-link-bar" class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span id="aps-link-dot" class="w-2 h-2 rounded-full bg-slate-300 shrink-0"></span>
+                            <span id="aps-link-text" class="text-xs font-medium text-slate-500 truncate">לא מקושר לפרויקט Autodesk</span>
+                        </div>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <button type="button" id="btn-aps-resolve" onclick="apsResolvePastedLink()" class="text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-100 transition shadow-sm" title="מזהה את ה-HUB מהקישור שהודבק, או מחפש את הפרויקט ב-Autodesk לפי קוד/מספר">זיהוי אוטומטי</button>
+                            <button type="button" onclick="openApsPicker()" class="text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg px-3 py-1.5 transition shadow-sm">בחירה מ-Autodesk</button>
+                        </div>
+                    </div>
+                    <div class="flex flex-col gap-2 mt-auto">
+                        <div class="flex items-center gap-3">
+                            <div class="w-32 shrink-0 text-xs font-semibold text-slate-400">ניהול מסמכים</div>
+                            <input type="text" id="info-doc-link" oninput="updateLinkButtons(); saveLocalState()" class="flex-1 min-w-0 text-xs font-medium text-slate-500 bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-2 py-2.5 outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="https://...">
+                            <button type="button" id="btn-doc-link" onclick="openWorkspaceLink('info-doc-link')" class="flex items-center justify-center w-9 h-9 bg-white border border-slate-200 rounded-lg text-emerald-600 hover:bg-emerald-50 transition shadow-sm shrink-0"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg></button>
+                            <div class="w-48 shrink-0"><select id="info-doc-management" onchange="handleDocManagementChange()" class="w-full text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg px-2 py-2.5 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm"><option value="">בחר פלטפורמה...</option><option value="CUSTOM">מותאם אישית</option></select></div>
+                        </div>
+                        <div class="flex justify-end hidden" id="custom-doc-wrapper"><input type="text" id="info-doc-management-custom" oninput="saveLocalState()" class="w-48 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-2.5 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm" placeholder="הקלד מערכת..."></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100 flex flex-col mb-4">
+            <div class="px-4 py-3 border-b border-slate-50 flex justify-between items-center">
+                <h3 class="font-bold text-blue-700 text-sm tracking-wide">מחברת הפרויקט</h3>
+            </div>
+            <div class="p-6 flex flex-col gap-4">
+                <div class="flex flex-col gap-2">
+                    <textarea id="notebook-new-content" rows="2" class="w-full border border-slate-200 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm bg-slate-50" dir="auto" placeholder="כתבו הערה או עדכון..."></textarea>
+                    <div class="flex justify-end">
+                        <button type="button" onclick="addNotebookEntry()" class="bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold px-4 py-2 rounded-lg transition shadow-sm">+ הוספת הערה</button>
+                    </div>
+                </div>
+                <div id="notebook-list" class="flex flex-col gap-2 mt-2">
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100 flex flex-col mb-4">
+            <div class="px-4 py-3 border-b border-slate-50 bg-white flex justify-between items-center"><h3 class="font-bold text-blue-700 text-xs tracking-wide">צוות BIM</h3></div>
+            <div class="overflow-x-auto p-2">
+                <table class="w-full text-left text-xs">
+                    <thead class="bg-slate-50 text-slate-500 font-bold"><tr><th class="px-4 py-2.5 border-b border-slate-100">תפקיד</th><th class="px-4 py-2.5 border-b border-slate-100">שם</th></tr></thead>
+                    <tbody class="divide-y divide-slate-50" id="info-team-table"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="flex justify-end pt-4 mt-6 border-t border-slate-100"><button type="button" onclick="switchTab('mdc')" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 rounded-lg shadow-sm transition">הבא &rarr;</button></div>
+    </section>
+
+    <!-- Dedicated architecture kickoff process and its immutable version history -->
+    <section id="tab-content-architecture-kickoff" class="hidden space-y-4" dir="rtl">
+      <div class="rounded-xl border border-slate-200 bg-white p-4"><h2 class="text-xl font-bold text-slate-900">פגישת התנעה אדריכלית</h2><p class="mt-1 text-sm text-slate-500">פרטי הפגישה נשמרים ברשומת התהליך. מסמך הפרויקט מופק מנתוני הפרויקט השמורים; פרטי הפגישה נשמרים בהיסטוריה לצד הגרסה.</p></div>
+        <div class="bg-white rounded-xl shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100 flex flex-col mb-4 overflow-hidden">
+            <div class="px-5 py-4 border-b border-slate-100 bg-white flex items-center justify-between">
+                <h3 class="font-bold text-blue-700 text-sm tracking-wide flex items-center gap-2">
+                    <svg id="icon-kickoff-acc-doc" class="w-4 h-4 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    פגישת התנעה אדריכלית · תיעוד פגישה
+                </h3>
+                <span class="text-xs text-slate-500">גרסאות והחלטות נשמרות בהיסטוריה</span>
+            </div>
+            
+            <div id="kickoff-acc-doc" class="p-6 flex flex-col gap-4" dir="rtl">
+                <div class="grid gap-4 rounded-xl border border-sky-100 bg-sky-50/50 p-4 md:grid-cols-2">
+                  <label class="text-sm font-semibold text-slate-700">מועד הפגישה<input id="architecture-kickoff-date" type="date" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2" oninput="markArchitectureKickoffDirty()"></label>
+                  <label class="text-sm font-semibold text-slate-700">משתתפים<input id="architecture-kickoff-attendees" type="text" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2" placeholder="שמות ותפקידים" oninput="markArchitectureKickoffDirty()"></label>
+                  <label class="text-sm font-semibold text-slate-700 md:col-span-2">סיכום והערות<textarea id="architecture-kickoff-notes" rows="3" maxlength="4000" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2" oninput="markArchitectureKickoffDirty()"></textarea></label>
+                  <label class="text-sm font-semibold text-slate-700">קישור לסקר<input id="architecture-kickoff-survey" type="url" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2" placeholder="https://…" oninput="markArchitectureKickoffDirty()"></label>
+                  <label class="text-sm font-semibold text-slate-700">תצוגות עבודה ליועצים<input id="architecture-kickoff-views" type="text" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2" placeholder="לדוגמה: תוכניות, חתכים, מודל" oninput="markArchitectureKickoffDirty()"></label>
+                </div>
+                <p class="text-xs text-slate-500">פרטי הפרויקט, המודלים ואנשי הקשר נשארים במסכים הקבועים שלהם ונכללים בצילום המקור בעת הפקה.</p>
+
+                <div class="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm w-full">
+                   <span class="text-sm font-bold text-slate-700 ml-4 flex-1">האם הוצג בפגישה מודל אדריכלות קיים?</span>
+                   <div class="flex gap-2 shrink-0" dir="ltr">
+                      <label class="cursor-pointer">
+                         <input type="radio" name="kick-arc-model" value="Yes" class="peer sr-only" onchange="markArchitectureKickoffDirty()">
+                         <div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">כן</div>
+                      </label>
+                      <label class="cursor-pointer">
+                         <input type="radio" name="kick-arc-model" value="No" class="peer sr-only" onchange="markArchitectureKickoffDirty()">
+                         <div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-slate-700 peer-checked:text-white peer-checked:border-slate-700 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">לא</div>
+                      </label>
+                   </div>
+                </div>
+
+                <div class="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm w-full">
+                   <span class="text-sm font-bold text-slate-700 ml-4 flex-1">האם קיימים צירים במודל אדריכלות?</span>
+                   <div class="flex gap-4 shrink-0 items-center" dir="ltr">
+                      <div id="grids-xy-container" class="hidden flex items-center gap-2">
+                          <div class="flex flex-col items-center"><label class="text-[10px] text-slate-400 font-bold mb-0.5">X</label><input type="text" id="kick-grids-x" oninput="markArchitectureKickoffDirty()" class="w-12 text-sm font-bold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm text-center"></div>
+                          <div class="flex flex-col items-center"><label class="text-[10px] text-slate-400 font-bold mb-0.5">Y</label><input type="text" id="kick-grids-y" oninput="markArchitectureKickoffDirty()" class="w-12 text-sm font-bold text-slate-800 bg-white border border-slate-200 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 outline-none transition shadow-sm text-center"></div>
+                      </div>
+                      <div class="flex gap-2">
+                          <label class="cursor-pointer"><input type="radio" name="kick-grids" value="Yes" class="peer sr-only" onchange="toggleGridsInputs(); markArchitectureKickoffDirty()"><div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">כן</div></label>
+                          <label class="cursor-pointer"><input type="radio" name="kick-grids" value="No" class="peer sr-only" onchange="toggleGridsInputs(); markArchitectureKickoffDirty()"><div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-slate-700 peer-checked:text-white peer-checked:border-slate-700 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">לא</div></label>
+                      </div>
+                   </div>
+                </div>
+
+                <div class="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm w-full">
+                   <span class="text-sm font-bold text-slate-700 ml-4 flex-1">האם יש מפלסים לשימוש פנימי במודל אדריכלות?</span>
+                   <div class="flex gap-2 shrink-0" dir="ltr">
+                      <label class="cursor-pointer"><input type="radio" name="kick-ar-level" value="Yes" class="peer sr-only" onchange="markArchitectureKickoffDirty()"><div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">כן</div></label>
+                      <label class="cursor-pointer"><input type="radio" name="kick-ar-level" value="No" class="peer sr-only" onchange="markArchitectureKickoffDirty()"><div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-slate-700 peer-checked:text-white peer-checked:border-slate-700 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">לא</div></label>
+                   </div>
+                </div>
+
+                <div class="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm w-full">
+                   <span class="text-sm font-bold text-slate-700 ml-4 flex-1">האם קיים מודל URS?</span>
+                   <div class="flex gap-2 shrink-0" dir="ltr">
+                      <label class="cursor-pointer"><input type="radio" name="kick-urs" value="Yes" class="peer sr-only" onchange="markArchitectureKickoffDirty()"><div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">כן</div></label>
+                      <label class="cursor-pointer"><input type="radio" name="kick-urs" value="No" class="peer sr-only" onchange="markArchitectureKickoffDirty()"><div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-slate-700 peer-checked:text-white peer-checked:border-slate-700 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">לא</div></label>
+                   </div>
+                </div>
+
+                <div class="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm w-full">
+                   <span class="text-sm font-bold text-slate-700 ml-4 flex-1">האם קיים רישיון ענן לאדריכלים?</span>
+                   <div class="flex gap-2 shrink-0" dir="ltr">
+                      <label class="cursor-pointer"><input type="radio" name="kick-licensing" value="Yes" class="peer sr-only" onchange="markArchitectureKickoffDirty()"><div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">כן</div></label>
+                      <label class="cursor-pointer"><input type="radio" name="kick-licensing" value="No" class="peer sr-only" onchange="markArchitectureKickoffDirty()"><div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-slate-700 peer-checked:text-white peer-checked:border-slate-700 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">לא</div></label>
+                   </div>
+                </div>
+            </div>
+        </div>
+        
+            <div class="flex flex-wrap items-center gap-3 border-t border-slate-100 px-6 py-4" dir="rtl">
+              <button id="btn-architecture-kickoff-save" type="button" disabled onclick="saveArchitectureKickoffDraftFromForm()" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">שמירת קלט</button>
+              <button id="btn-architecture-kickoff-generate" type="button" disabled onclick="generateArchitectureKickoffFromForm()" class="rounded-lg bg-teal-700 px-4 py-2 text-sm font-bold text-white hover:bg-teal-800">הפקת מסמך פרויקט</button>
+              <span id="architecture-kickoff-save-state" class="text-sm text-slate-500">לחיצה על הפקת מסמך שומרת את הקלט ומפיקה.</span>
+            </div>
+        <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm" dir="rtl">
+          <div class="flex items-center justify-between gap-3"><div><h3 class="font-bold text-slate-900">גרסאות ובדיקות</h3><p class="text-xs text-slate-500">הפקה יוצרת גרסה; החלטת בדיקה נשמרת בנפרד ואינה מאשרת שלב עבודה.</p></div><button type="button" onclick="loadArchitectureKickoffState(true)" class="text-sm font-semibold text-teal-700">רענון</button></div>
+          <div id="architecture-kickoff-versions" class="mt-4 space-y-3"><p class="text-sm text-slate-500">טוען היסטוריית גרסאות…</p></div>
+        </section>
+    </section>
+
+    <!-- Consultant presentation stays a separate process and keeps its original generator. -->
+    <section id="tab-content-consultant-kickoff" class="hidden space-y-4" dir="rtl">
+      <div class="rounded-xl border border-slate-200 bg-white p-4"><h2 class="text-xl font-bold text-slate-900">התנעת יועצים</h2><p class="mt-1 text-sm text-slate-500">יצירת מצגת הצגת הפרויקט ליועצים.</p></div>
+        <div class="bg-white rounded-xl shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-slate-100 flex flex-col mb-4 overflow-hidden">
+            <div class="px-4 py-3 border-b border-slate-50 bg-emerald-50/30 flex justify-between items-center cursor-pointer hover:bg-emerald-50/50 transition" onclick="toggleAccordion('kickoff-acc-pres', 'icon-kickoff-acc-pres')">
+                <h3 class="font-bold text-emerald-700 text-sm tracking-wide flex items-center gap-2">
+                    <svg id="icon-kickoff-acc-pres" class="w-4 h-4 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    Project Presentation Generator
+                </h3>
+                <button type="button" onclick="event.stopPropagation(); generatePresentationDoc()" id="btn-gen-presdoc" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-1.5 px-4 rounded-lg text-xs transition shadow-sm flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+                    GENERATE PRESENTATION
+                </button>
+            </div>
+            
+            <div id="pres-doc-success" class="hidden mx-4 mt-3 bg-emerald-50 border border-emerald-200 rounded p-3 text-sm flex justify-between items-center">
+                <span class="text-emerald-800 font-semibold flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> המצגת נוצרה בהצלחה!</span>
+                <a id="pres-doc-link" href="#" target="_blank" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded text-xs font-bold shadow-sm">פתיחת המצגת ↗</a>
+            </div>
+            
+            <div id="kickoff-acc-pres" class="p-6 flex flex-col gap-4" dir="ltr">
+
+                <div class="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm w-full">
+                   <span class="text-sm font-bold text-slate-700 mr-4 flex-1">[Phases] שלביות ביצוע:</span>
+                   <div class="flex gap-2 shrink-0">
+                      <label class="cursor-pointer">
+                         <input type="radio" name="kick-phases" value="Yes" class="peer sr-only" onchange="saveLocalState()">
+                         <div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">כן</div>
+                      </label>
+                      <label class="cursor-pointer">
+                         <input type="radio" name="kick-phases" value="No" class="peer sr-only" onchange="saveLocalState()">
+                         <div class="px-5 py-1.5 rounded-md border border-slate-200 peer-checked:bg-slate-700 peer-checked:text-white peer-checked:border-slate-700 text-sm font-bold transition shadow-sm bg-slate-50 text-slate-500 hover:bg-white">No</div>
+                      </label>
+                   </div>
+                </div>
+                
+                <div class="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm w-full mt-4">
+                   <span class="text-sm font-bold text-slate-700 mr-4 flex-1">לוגו ניהול הפרויקט:</span>
+                   <div class="shrink-0">
+                      <input type="file" id="pres-pm-logo" accept="image/png, image/jpeg" class="text-xs text-slate-500 file:mr-4 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer">
+                   </div>
+                </div>
+                
+                <div class="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm w-full">
+                   <span class="text-sm font-bold text-slate-700 mr-4 flex-1">לוגו היזם:</span>
+                   <div class="shrink-0">
+                      <input type="file" id="pres-dev-logo" accept="image/png, image/jpeg" class="text-xs text-slate-500 file:mr-4 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer">
+                   </div>
+                </div>
+                
+            </div>
+        </div>
+
+    </section>
+
+    <!-- Document library references the same process versions; it does not collect duplicate inputs. -->
+    <section id="tab-content-kickoff" class="hidden space-y-4" dir="rtl">
+      <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-xl font-bold text-slate-900">ספריית מסמכים</h2><p class="mt-1 text-sm text-slate-500">המסמכים כאן הם אותן גרסאות שנוצרו בתהליכי הפרויקט.</p></div><button type="button" onclick="switchTab('architecture-kickoff')" class="rounded-lg bg-teal-700 px-4 py-2 text-sm font-bold text-white">פתיחת פגישת התנעה</button></div>
+        <div id="project-document-library" class="mt-4 space-y-3"><p class="text-sm text-slate-500">טוען מסמכים…</p></div>
+      </div>
+      <div class="rounded-xl border border-slate-200 bg-white p-4"><h3 class="font-bold text-slate-800">מצגת התנעת יועצים</h3><p class="mt-1 text-sm text-slate-500">הפקת המצגת נמצאת במסך הייעודי.</p><button type="button" onclick="switchTab('consultant-kickoff')" class="mt-2 text-sm font-bold text-teal-700">פתיחת מסך התנעת יועצים ←</button></div>
+    </section>
+
+    <!-- PROJECT SETUP TAB (MDC) -->
+    <section id="tab-content-mdc" class="hidden bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-6 w-full relative" dir="rtl">
+      <div><h2 class="text-xl font-bold text-slate-900 tracking-tight" dir="rtl">מבנה הפרויקט והמודלים</h2></div>
+      <nav dir="rtl" aria-label="שלבי הגדרת הפרויקט" class="grid grid-cols-2 gap-2 rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm font-medium md:grid-cols-5">
+        <button type="button" onclick="setMdcStep(1)" class="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-right"><span id="step-badge-1" class="flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">1</span><span id="step-text-1" class="font-bold text-slate-800">מבנה פיזי</span></button>
+        <button type="button" onclick="setMdcStep(2)" class="flex items-center gap-2 rounded-lg px-3 py-2 text-right"><span id="step-badge-2" class="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600">2</span><span id="step-text-2" class="font-semibold text-slate-500">מודלים משותפים וחלופות</span></button>
+        <button type="button" onclick="setMdcStep(3)" class="flex items-center gap-2 rounded-lg px-3 py-2 text-right"><span id="step-badge-3" class="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600">3</span><span id="step-text-3" class="font-semibold text-slate-500">דיסציפלינות</span></button>
+        <button type="button" onclick="setMdcStep(4)" class="flex items-center gap-2 rounded-lg px-3 py-2 text-right"><span id="step-badge-4" class="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600">4</span><span id="step-text-4" class="font-semibold text-slate-500">רשימת מודלים וענן</span></button>
+<button type="button" onclick="setMdcStep(5)" class="flex items-center gap-2 rounded-lg px-3 py-2 text-right"><span id="step-badge-5" class="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600">5</span><span id="step-text-5" class="font-semibold text-slate-500">סכמת מודל</span></button>
+      </nav>
+      <div id="mdc-relationship-summary" class="rounded-lg border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-slate-700" aria-live="polite"></div>
+      <div class="w-full">
+        
+        <!-- STEP 1 -->
+        <div id="mdc-step-body-1" class="space-y-8 w-full">
+          <div class="w-full">
+             <div class="flex items-center gap-4 mb-1">
+                <h3 class="font-bold text-slate-900 text-base">מגרשים</h3>
+                <button type="button" onclick="addLotRow()" class="text-blue-600 hover:text-blue-800 text-sm font-semibold transition flex items-center gap-1">+ הוספת מגרש</button>
+             </div>
+             <p class="text-xs text-slate-400 mb-3">הגדר מגרשים לפרויקט</p>
+             <div class="border border-slate-200 rounded-lg bg-white shadow-sm overflow-visible">
+                 <table class="w-full text-left text-sm">
+                     <thead class="bg-slate-50 text-slate-600 border-b border-slate-200">
+                         <tr><th class="py-2.5 px-3 font-semibold">מספר מגרש</th><th class="py-2.5 px-3 w-16 text-center font-semibold">פעולה</th></tr>
+                     </thead>
+                     <tbody id="tbl-lots-body" class="divide-y divide-slate-100"></tbody>
+                 </table>
+             </div>
+          </div>
+
+          <div class="w-full">
+             <div class="flex items-center gap-4 mb-1">
+                <h3 class="font-bold text-slate-900 text-base">מבנים</h3>
+                <button type="button" onclick="addBuildingRow()" class="text-blue-600 hover:text-blue-800 text-sm font-semibold transition flex items-center gap-1">+ הוספת מבנה</button>
+             </div>
+             <p class="text-xs text-slate-400 mb-3">(Lot) הגדר בניינים ושייך למגרש</p>
+             <div class="border border-slate-200 rounded-lg bg-white shadow-sm overflow-visible">
+                 <table class="w-full text-left text-sm">
+                     <thead class="bg-slate-50 text-slate-600 border-b border-slate-200">
+                         <tr>
+                            <th class="py-2.5 px-3 font-semibold w-1/4">שם</th>
+                            <th class="py-2.5 px-3 font-semibold w-1/4">תיאור</th>
+                            <th class="py-2.5 px-3 font-semibold w-1/6">קומות</th>
+                            <th class="py-2.5 px-3 font-semibold w-1/4">מגרש המבנה</th>
+                            <th class="py-2.5 px-3 font-semibold text-center w-24">GL</th>
+                            <th class="py-2.5 px-3 w-16 text-center font-semibold">פעולה</th>
+                         </tr>
+                     </thead>
+                     <tbody id="tbl-buildings-body" class="divide-y divide-slate-100"></tbody>
+                 </table>
+             </div>
+          </div>
+
+          <div class="w-full">
+             <div class="flex items-center gap-4 mb-1">
+                <h3 class="font-bold text-slate-900 text-base">מרתפים</h3>
+                <button type="button" onclick="addBasementRow()" class="text-blue-600 hover:text-blue-800 text-sm font-semibold transition flex items-center gap-1">+ הוספת מרתף</button>
+             </div>
+             <p class="text-xs text-slate-400 mb-3">הגדר מרתפים ושייך בניינים ומגרשים</p>
+             <div class="border border-slate-200 rounded-lg bg-white shadow-sm overflow-visible mb-16">
+                 <table class="w-full text-left text-sm relative">
+                     <thead class="bg-slate-50 text-slate-600 border-b border-slate-200">
+                         <tr>
+                            <th class="py-2.5 px-3 font-semibold w-1/6">קוד</th>
+                            <th class="py-2.5 px-3 font-semibold w-1/4">תיאור</th>
+                            <th class="py-2.5 px-3 font-semibold w-1/4">מבנים</th>
+                            <th class="py-2.5 px-3 font-semibold w-1/6">מספר קומות</th>
+                            <th class="py-2.5 px-3 font-semibold w-1/6">מגרשים</th>
+                            <th class="py-2.5 px-3 font-semibold text-center w-24">GL</th>
+                            <th class="py-2.5 px-3 w-16 text-center font-semibold">פעולה</th>
+                         </tr>
+                     </thead>
+                     <tbody id="tbl-basements-body" class="divide-y divide-slate-100"></tbody>
+                 </table>
+             </div>
+          </div>
+        </div>
+        
+        <!-- STEP 2: Visual Site Grouping -->
+        <div id="mdc-step-body-2" class="hidden space-y-4 w-full relative pb-20">
+          <div class="mb-4">
+              <h3 class="text-lg font-bold text-slate-900">תוכנית מידול</h3>
+              <p class="text-[11px] text-slate-500">בחרו מבנים מכל מגרש כדי לקבץ אותם למודל הנדסי אחד</p>
+          </div>
+          
+          <!-- Dynamic Lots Container -->
+          <div id="visual-lots-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
+              <!-- Rendered via JS -->
+          </div>
+
+          <!-- SUMMARY TABLE -->
+          <div class="mt-12 border-t border-slate-200 pt-8">
+              <div class="flex justify-between items-end mb-4">
+                  <div>
+                      <h3 class="text-lg font-bold text-slate-900">טבלת סיכום</h3>
+                      <p class="text-xs text-slate-500 mt-1">סיכום המודלים לייצור, המבנים המשויכים ואפשרויות התכנון המותאמות</p>
+                  </div>
+                  <div class="text-sm font-bold text-slate-700">סה״כ מודלים: <span id="summary-total-models" class="text-blue-600">0</span></div>
+              </div>
+              
+              <div class="border border-slate-200 rounded-lg bg-white shadow-sm overflow-hidden">
+                  <table class="w-full text-left text-sm">
+                      <thead class="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 text-xs tracking-wider uppercase">
+                          <tr>
+                              <th class="py-3 px-4">מגרש</th>
+                              <th class="py-3 px-4">שם המודל</th>
+                              <th class="py-3 px-4">סוג המודל</th>
+                              <th class="py-3 px-4">מבנים במודל</th>
+                              <th class="py-3 px-4 text-center">אפשרויות תכנון</th>
+                          </tr>
+                      </thead>
+                      <tbody id="summary-table-body" class="divide-y divide-slate-100">
+                          <!-- Rendered via JS -->
+                      </tbody>
+                  </table>
+              </div>
+          </div>
+
+          <!-- Floating Action Bar -->
+          <div id="floating-action-bar" class="hidden fixed bottom-10 left-1/2 transform -translate-x-1/2 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-4 z-40 transition-all">
+              <div class="flex items-center gap-2 pr-4 border-r border-slate-700">
+                  <div class="w-3 h-3 rounded-full bg-blue-500 animate-pulse"></div>
+                  <span id="floating-selected-count" class="font-bold text-sm">2 מבנים נבחרו</span>
+              </div>
+              <button type="button" onclick="clearBuildingSelection()" class="text-slate-400 hover:text-white text-sm font-medium transition">ביטול</button>
+              <button type="button" id="btn-unify-models" onclick="openGroupModal()" class="bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold px-4 py-2 rounded-lg transition shadow-sm flex items-center gap-2">
+                  איחוד למודל יחיד &rarr;
+              </button>
+          </div>
+        </div>
+
+        <!-- GROUPING MODAL (Step 2) -->
+        <div id="modal-group-buildings" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm transition-opacity" dir="rtl">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 border border-slate-200 flex flex-col">
+                <div class="flex items-center justify-between p-4 border-b border-slate-100">
+                    <h3 class="text-lg font-bold text-slate-900">מיקום באתר</h3>
+                    <button type="button" onclick="closeGroupModal()" class="text-slate-400 hover:text-slate-600"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+                </div>
+                <div class="p-5 space-y-5">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 mb-2">מבנים שייכללו במודל:</label>
+                        <div id="modal-selected-buildings" class="flex flex-wrap gap-2 border border-slate-200 rounded-lg p-3 bg-slate-50 min-h-[50px]"></div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">שם המודל <span class="text-red-500">*</span></label>
+                        <input type="text" id="modal-group-name" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" placeholder="הזן שם מודל...">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-2">הגדרת המודל:</label>
+                        <div class="flex gap-4">
+                            <label class="flex-1 flex items-center justify-center gap-2 border border-slate-200 rounded-lg p-2.5 cursor-pointer hover:bg-slate-50 transition">
+                                <input type="radio" name="modal-group-type" value="טיפוסי" checked class="w-4 h-4 text-blue-600 focus:ring-blue-500">
+                                <span class="text-sm font-semibold text-slate-700">טיפוסי</span>
+                            </label>
+                            <label class="flex-1 flex items-center justify-center gap-2 border border-slate-200 rounded-lg p-2.5 cursor-pointer hover:bg-slate-50 transition">
+                                <input type="radio" name="modal-group-type" value="מאוחד" class="w-4 h-4 text-blue-600 focus:ring-blue-500">
+                                <span class="text-sm font-semibold text-slate-700">מאוחד</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-2">צבע זיהוי למודל:</label>
+                        <div class="flex gap-3 flex-wrap" id="modal-color-picker">
+                            <!-- Injected dynamically by JS -->
+                        </div>
+                    </div>
+                </div>
+                <div class="p-4 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 rounded-b-xl">
+                    <button type="button" onclick="closeGroupModal()" class="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-200 rounded-lg transition">ביטול</button>
+                    <button type="button" onclick="saveBuildingGroup()" class="px-6 py-2 text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition shadow-sm">שמור מודל</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- DESIGN OPTIONS MODAL (Step 2) -->
+        <div id="modal-design-options" class="hidden fixed inset-0 z-[105] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm transition-opacity" dir="rtl">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 border border-slate-200 flex flex-col max-h-[90vh]">
+                <div class="flex items-center justify-between p-4 border-b border-slate-100">
+                    <h3 class="text-lg font-bold text-slate-900" id="do-modal-title">אפשרויות תכנון: "מודל"</h3>
+                    <button type="button" onclick="closeDesignOptionModal()" class="text-slate-400 hover:text-slate-600"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+                </div>
+                <div class="p-5 overflow-y-auto space-y-5 flex-1">
+                    <div class="border border-blue-100 bg-blue-50/30 p-4 rounded-xl space-y-4">
+                        <h4 class="text-xs font-bold text-blue-800">הוספת הערת עיצוב חדשה</h4>
+                        <div>
+                            <input type="text" id="do-input-title" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 outline-none" placeholder="...כותרת העיצוב (לדוגמה: מפרט חזיתות, חיפוי אבן)">
+                        </div>
+                        <div>
+                            <textarea id="do-input-desc" rows="3" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 outline-none" placeholder="...תיאור העיצוב (הנחיות, חומרים, הערות אדריכלות)"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-700 mb-2">:שיוך הערת העיצוב</label>
+                            <div class="flex flex-wrap gap-3" id="do-target-radios">
+                                <!-- Rendered dynamically via JS -->
+                            </div>
+                        </div>
+                        <div class="text-left">
+                            <button type="button" onclick="addDesignOption()" class="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition shadow-sm">+ הוספת אפשרות תכנון</button>
+                        </div>
+                    </div>
+                    
+                    <div class="pt-2">
+                        <label class="block text-xs font-bold text-slate-500 mb-3">:רשימת הערות קיימות</label>
+                        <div id="do-existing-list" class="space-y-2">
+                            <!-- Rendered dynamically via JS -->
+                        </div>
+                    </div>
+                </div>
+                <div class="p-4 border-t border-slate-100 flex justify-start bg-slate-50 rounded-b-xl">
+                    <button type="button" onclick="closeDesignOptionModal()" class="px-6 py-2 text-sm font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-lg transition shadow-sm">סגור</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- STEP 3: DISCIPLINE TABLE -->
+        <div id="mdc-step-body-3" class="hidden space-y-4 w-full">
+          <div class="flex justify-between items-center mb-2 w-full">
+             <div class="flex items-center gap-2">
+                 <select id="inline-discipline-select" onchange="addDisciplineFromDropdown()" class="text-sm font-bold text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none transition cursor-pointer"><option value="">+ הוספת תחום</option></select>
+             </div>
+             <div class="text-xs font-bold text-slate-500" dir="rtl">
+                 סה"כ דיסציפלינות פעילות: <span id="disciplines-count" class="text-blue-600 font-bold">0</span>
+             </div>
+          </div>
+          
+          <div class="border border-slate-200 rounded-xl bg-white shadow-sm overflow-hidden w-full">
+              <table class="w-full text-left text-sm" id="tbl-disciplines">
+                  <thead class="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 text-xs uppercase">
+                      <tr>
+                          <th class="py-3 px-3 w-10 text-center">#</th>
+                          <th class="py-3 px-4">תחומים</th>
+                          <th class="py-3 px-4 text-center">קוד תחום</th>
+                          <th class="py-3 px-4 text-center">קוד ארגוני</th>
+                          <th class="py-3 px-4 text-center">פלטפורמה</th>
+                          <th class="py-3 px-4 text-center">היקף התחום</th>
+                          <th class="py-3 px-3 w-12 text-center">פעולות</th>
+                      </tr>
+                  </thead>
+                  <tbody id="tbl-disciplines-body" class="divide-y divide-slate-100">
+                      <!-- Rendered via JS -->
+                  </tbody>
+              </table>
+          </div>
+        </div>
+        
+        <!-- STEP 4: Live Dynamic Table Preview -->
+        <?!= include('View_ModelSchema'); ?>
+<div id="mdc-step-body-4" class="hidden space-y-4 w-full">
+          <section id="model-governance-root" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" dir="rtl" aria-label="שיוך מודלים ובקרות">טוען שיוך מודלים ובקרות…</section>
+          <div class="flex justify-between items-end mb-4">
+             <div>
+                 <h3 class="text-lg font-bold text-slate-900">רישום המודלים לפי הפירוק</h3>
+                 <p class="text-xs text-slate-500 mt-1">הרישום שנטען מהמקור נשמר עד ליצירה מחדש מפורשת. עריכות וסדר השורות נשמרים בנפרד.</p>
+             </div>
+             
+             <!-- RESET AND SAVE BUTTONS -->
+             <div class="flex gap-2">
+                 <button type="button" onclick="regenerateModelTableFromDecomposition()" class="text-xs bg-amber-600 text-white hover:bg-amber-700 px-3 py-1.5 rounded-lg transition font-bold shadow-sm">יצירה מחדש לפי הפירוק</button>
+                 <button type="button" onclick="saveModelSort()" class="text-xs bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100 px-3 py-1.5 rounded-lg transition font-bold shadow-sm flex items-center gap-1.5" title="שמירת סדר הטבלה הנוכחי">
+                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                     שמירת סדר
+                 </button>
+                 <button type="button" onclick="openResetModal()" class="text-xs bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100 px-3 py-1.5 rounded-lg transition font-bold shadow-sm flex items-center gap-1.5" title="החזרה למיון ברירת המחדל לפי תחום">
+                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                     איפוס סדר
+                 </button>
+             </div>
+          </div>
+
+          <!-- COLUMN VISIBILITY TOGGLES -->
+          <div class="bg-white border border-slate-200 rounded-xl p-4 shadow-sm mb-4">
+             <span class="text-xs font-bold text-slate-500 block mb-3 uppercase tracking-wider">הגדרות הצגת עמודות</span>
+             <div class="flex flex-wrap gap-5">
+                 <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer"><input type="checkbox" id="vis-code" checked class="rounded text-blue-600 focus:ring-blue-500" onchange="toggleColumnVis('code', this.checked)"> שם המודל</label>
+                 <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer"><input type="checkbox" id="vis-projectCode" checked class="rounded text-blue-600 focus:ring-blue-500" onchange="toggleColumnVis('projectCode', this.checked)"> קוד פרויקט</label>
+                 <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer"><input type="checkbox" id="vis-discCode" checked class="rounded text-blue-600 focus:ring-blue-500" onchange="toggleColumnVis('discCode', this.checked)"> תחום</label>
+                 <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer"><input type="checkbox" id="vis-bldgCode" checked class="rounded text-blue-600 focus:ring-blue-500" onchange="toggleColumnVis('bldgCode', this.checked)"> מבנה/מרתף</label>
+                 <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer"><input type="checkbox" id="vis-lotCode" checked class="rounded text-blue-600 focus:ring-blue-500" onchange="toggleColumnVis('lotCode', this.checked)"> מגרש</label>
+                 <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer"><input type="checkbox" id="vis-desc" checked class="rounded text-blue-600 focus:ring-blue-500" onchange="toggleColumnVis('desc', this.checked)"> תיאור</label>
+                 <label class="flex items-center gap-2 text-sm font-semibold text-slate-700 cursor-pointer"><input type="checkbox" id="vis-comment" checked class="rounded text-blue-600 focus:ring-blue-500" onchange="toggleColumnVis('comment', this.checked)"> הערות</label>
+             </div>
+          </div>
+          
+          <div class="w-full overflow-x-auto pb-16 border border-slate-200 rounded-lg shadow-sm">
+             <table class="w-full text-left text-sm bg-white whitespace-nowrap" id="final-model-table">
+                <!-- Javascript will inject the dynamic Thead and Tbody here to respect reordering -->
+             </table>
+          </div>
+          <details id="unregistered-cloud-files" class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-4 py-3 text-sm font-bold text-slate-800">
+              <span>קובצי שרטוט נוספים בענן</span>
+              <span id="unregistered-cloud-count" class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">טוען צילום ענן…</span>
+            </summary>
+            <div class="border-t border-slate-100 px-4 py-3">
+              <p class="mb-3 text-xs text-slate-500">קובצי שרטוט שאינם RVT מוצגים כאן לעיון. שיוך מודלי RVT והגדרת הבקרות מתבצעים בטבלת השיוך למעלה.</p>
+              <div class="overflow-x-auto">
+                <table class="w-full min-w-[760px] text-left text-xs">
+                  <thead class="bg-slate-50 text-slate-500"><tr><th class="px-3 py-2">שם קובץ</th><th class="px-3 py-2">נתיב תיקייה</th><th class="px-3 py-2">גרסה</th><th class="px-3 py-2">תאריך עדכון קובץ</th></tr></thead>
+                  <tbody id="unregistered-cloud-body" class="divide-y divide-slate-100"><tr><td colspan="4" class="px-3 py-4 text-slate-400">ממתין לטעינת צילום ענן…</td></tr></tbody>
+                </table>
+              </div>
+              <p class="mt-2 text-[10px] text-slate-400">תאריך העדכון הוא מטא־נתון קובץ בענן ואינו מעיד על מועד פרסום.</p>
+            </div>
+          </details>
+          <div class="pt-2">
+              <button type="button" onclick="addCustomModel()" class="text-blue-600 hover:text-blue-800 font-bold text-xs flex items-center gap-1 transition">+ הוספת מודל מותאם</button>
+          </div>
+        </div>
+
+      </div>
+      
+      <div class="flex justify-between pt-4 mt-6 border-t border-slate-100">
+        <button type="button" id="btn-mdc-prev" onclick="changeStep(-1)" disabled class="bg-slate-100 text-slate-400 font-semibold px-4 py-1.5 rounded-lg">הקודם</button>
+        <div class="flex gap-2">
+          <button type="button" id="btn-mdc-next" onclick="changeStep(1)" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 rounded-lg shadow-sm transition">הבא &rarr;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- CONTACTS TAB -->
+    <section id="tab-content-contacts" class="hidden bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-4" dir="rtl">
+      <div class="border-b border-slate-100 pb-3 flex flex-wrap justify-between items-center gap-4">
+        <div>
+          <h2 class="text-lg font-bold text-slate-900 tracking-tight">אנשי קשר בפרויקט</h2>
+          <p class="text-xs text-slate-400">ניהול הצוות מתבצע כאן. לייצוא אל Google Sheets יש לעבור ללשונית מסד נתונים.</p>
+        </div>
+        <div class="flex gap-2">
+          <button type="button" onclick="openAddContactModal()" class="bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold px-3 py-1.5 rounded-lg transition shadow-sm">+ הוספת איש קשר</button>
+        </div>
+      </div>
+      
+      <div class="border border-slate-200 rounded-xl overflow-hidden text-xs bg-white mb-16">
+        <table class="w-full text-left">
+          <thead><tr class="bg-slate-50 border-b border-slate-200 font-semibold text-slate-700"><th class="p-2.5">שם איש קשר</th><th class="p-2.5">תחום</th><th class="p-2.5">חברה</th><th class="p-2.5">כתובת דוא״ל</th><th class="p-2.5 text-center">פעולות</th></tr></thead>
+          <tbody id="tbl-contacts" class="divide-y divide-slate-100"></tbody>
+        </table>
+      </div>
+      <!-- UPDATED NEXT/PREV BUTTONS to point properly -->
+      <div class="flex justify-between pt-4 mt-6 border-t border-slate-100">
+        <button type="button" onclick="switchTab('kickoff')" class="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold px-4 py-1.5 rounded-lg transition shadow-sm">&larr; הקודם</button>
+        <button type="button" id="btn-contacts-next-db" onclick="switchTab('db')" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-1.5 rounded-lg shadow-sm transition">הבא &rarr;</button>
+      </div>
+    </section>
+
+    <!-- Read-only cloud panels. HTML arrives from the project-local Apps Script endpoint and runs in isolated srcdoc frames. -->
+    <section id="tab-content-cloud-issues" class="hidden relative bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div class="flex justify-end px-3 pt-2"><button type="button" onclick="refreshCloudPanel('issues')" class="bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold px-3 py-2 rounded-lg">טעינה מחדש של הצילום</button></div>
+      <div id="cloud-issues-message" class="hidden px-5 py-8 text-sm text-slate-500"></div><iframe id="cloud-issues-frame" title="Issues בענן של הפרויקט" sandbox="allow-scripts allow-forms allow-popups" referrerpolicy="no-referrer" class="hidden block w-full bg-slate-50" style="height:min(78vh,900px);border:0"></iframe>
+    </section>
+
+    <!-- DATABASE TAB -->
+    <section id="tab-content-db" class="hidden bg-white rounded-xl border border-slate-200 shadow-sm p-4 md:p-6 space-y-6" dir="rtl">
+        <div class="border-b border-slate-100 pb-4 flex justify-between items-center">
+            <div>
+                <h2 class="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                   <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6H6c-1.1 0-2 .9-2 2zm10 1.5L18.5 10H14V5.5z"></path></svg> 
+                   Project Database Synchronization
+                </h2>
+                <p class="text-sm text-slate-500 mt-1">ניהול החיבור בין נתוני היישום המקומיים לבין Google Workspace.</p>
+            </div>
+        </div>
+
+        <div id="db-link-container" class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col lg:flex-row items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm border border-slate-200 shrink-0">
+                    <svg class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                </div>
+                <div>
+                    <h3 class="font-bold text-slate-800 text-sm">החיבור לענן פעיל</h3>
+                    <p class="text-xs text-slate-500 mt-0.5" id="db-last-sync-text">מוכן לסנכרון או למשיכת שינויים.</p>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+                <button type="button" id="db-success-link" onclick="openSheetOnly()" class="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 font-bold py-2 px-4 rounded shadow-sm transition-all text-xs flex items-center gap-1.5">פתיחת גיליון ↗</button>
+                <button type="button" onclick="toggleVersionHistory()" class="bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 font-bold py-2 px-4 rounded shadow-sm transition-all text-xs flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> VERSION HISTORY
+                </button>
+                <button type="button" id="btn-pull-cloud" onclick="pullDataFromCloud()" class="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 font-bold py-2 px-4 rounded shadow-sm transition-all text-xs flex items-center gap-1.5"><svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-3 3m0 0l-3-3m3 3V4"></path></svg> משיכה</button>
+                <button type="button" id="btn-sync-sheet-now" onclick="triggerManualSync()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-all text-xs flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg> סנכרון</button>
+            </div>
+        </div>
+
+        <div id="inline-version-history" class="hidden bg-white border border-slate-200 rounded-xl shadow-sm mt-4 overflow-hidden">
+            <div class="bg-slate-50 border-b border-slate-200 px-4 py-3 flex justify-between items-center">
+                <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                    <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    App Sync History
+                </h3>
+                <button onclick="toggleVersionHistory()" class="text-slate-400 hover:text-slate-600 text-xs font-bold border border-slate-200 bg-white px-2 py-1 rounded transition">סגירה</button>
+            </div>
+            <div class="p-0 max-h-64 overflow-y-auto">
+                <table class="w-full text-left text-xs">
+                    <thead class="bg-white sticky top-0 border-b border-slate-100 shadow-sm z-10">
+                        <tr class="text-slate-500 text-xs uppercase">
+                            <th class="py-2.5 px-4 font-bold">תאריך ושעה</th>
+                            <th class="py-2.5 px-4 font-bold">משתמש</th>
+                            <th class="py-2.5 px-4 font-bold">פעולה</th>
+                        </tr>
+                    </thead>
+                    <tbody id="version-history-tbody" class="divide-y divide-slate-50">
+                        <!-- Rendered via JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="flex justify-start pt-3 border-t border-slate-100"><button type="button" onclick="switchTab('contacts')" class="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold px-4 py-1.5 rounded-lg transition shadow-sm">&larr; הקודם</button></div>
+    </section>
+
+<?!= include('View_Publish'); ?>
+<?!= include('View_AutodeskPicker'); ?>
+</div>

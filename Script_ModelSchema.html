@@ -1,0 +1,1294 @@
+<script>
+  // ==========================================
+  // MDC step 5 - סכמת מודל (3D spatial schema)
+  // Built per project from step-1/2 data (state.mdcLots / mdcBuildings / mdcBasements /
+  // siteGroups / designOptions). Only geometry + colour are stored, in state.modelSchema
+  // (saved to the project's Model_Schema tab). Floors are shared with step 1.
+  // Three.js loads lazily the first time this step opens.
+  // ==========================================
+  (function () {
+    'use strict';
+
+    var THREE_URLS = [
+      'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js',
+      'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js'
+    ];
+    var FLOOR_H = 3.3, BASEMENT_H = 3.5;                 // metres per level
+    var BLDG_SIZE = 14, BLDG_GAP = 6, LOT_MARGIN = 6, LOT_GAP = 10, LOT_MIN = 30, MIN_SIZE = 3;
+    var NONE_LOT = '__none';
+    var PALETTE = [   // 18 soft architectural tones, shown as a compact 6x3 grid
+      { name: 'Warm Linen', hex: '#E2D9CC' }, { name: 'Birch Bark', hex: '#D6CEB9' }, { name: 'Soft Travertine', hex: '#E4CFA9' },
+      { name: 'Sand', hex: '#EAD7B7' }, { name: 'Dusty Terracotta', hex: '#D8BBAF' }, { name: 'Clay', hex: '#C9A48F' },
+      { name: 'Blush', hex: '#E8C4C0' }, { name: 'Eucalyptus Sage', hex: '#B8C4BB' }, { name: 'Olive', hex: '#A9B38F' },
+      { name: 'Moss', hex: '#8FA58A' }, { name: 'Mint', hex: '#BFE0D3' }, { name: 'Foggy Nord Blue', hex: '#B0C2D0' },
+      { name: 'Sky', hex: '#A9C9E8' }, { name: 'Steel Blue', hex: '#7E9CB8' }, { name: 'Lavender', hex: '#C9C0DE' },
+      { name: 'Muted Slate', hex: '#B0B8B5' }, { name: 'Graphite', hex: '#8A8F94' }, { name: 'Charcoal', hex: '#5E6468' }
+    ];
+    var LOT_COLORS = ['#E2D9CC', '#D6CEB9'];
+    var BLDG_COLORS = ['#B8C4BB', '#B0C2D0', '#D8BBAF', '#B0B8B5', '#D6CEB9'];
+    var BASEMENT_COLOR = '#E4CFA9';
+    var TYPE_LABEL = { LOT: 'מגרש', BUILDING: 'מבנה', BASEMENT: 'מרתף' };
+    var ARROW_COLORS = { LOT: 0x2563eb, BUILDING: 0xdc2626, BASEMENT: 0x16a34a };
+
+    var ms = {
+      loading: null, ready: false, failed: false,
+      scene: null, camera: null, renderer: null, controls: null, gizmo: null, light: null,
+      contract: null, projectNo: null,
+      objects: [],        // scene objects rebuilt each time (disposed on rebuild)
+      pickables: [],      // meshes that can be clicked
+      groups: {},         // key -> THREE.Group
+      labels: [],         // {el, obj, offsetY, key}
+      arrows: [],
+      selected: null,     // key "TYPE|code"
+      highlight: null,
+      mode: 'pushpull',
+      drag: null,         // active push/pull drag
+      gizmoStart: null,
+      explode: 0, showOptions: true,
+      xray: {}, bMeshes: [], hover: null, xrayAll: false, lastOcc: 0,
+      undo: [],
+      raycaster: null, mouse: null
+    };
+
+    function $(id) { return document.getElementById(id); }
+    function r1(n) { return Math.round(n * 10) / 10; }
+    function esc(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; });
+    }
+    function hexNum(hex) { return parseInt(String(hex || '#cccccc').replace('#', ''), 16); }
+    function keyOf(type, code) { return type + '|' + code; }
+    function splitList(v) { return String(v == null ? '' : v).split(',').map(function (s) { return s.trim(); }).filter(Boolean); }
+
+    function parseFloors(v) {
+      var s = String(v == null ? '' : v).trim();
+      if (/^\d+$/.test(s)) return { n: Math.max(1, parseInt(s, 10)), editable: true, raw: s };
+      if (s === '') return { n: 1, editable: true, raw: '' };
+      var m = s.match(/\d+/g);
+      return { n: m ? Math.max.apply(null, m.map(Number)) || 1 : 1, editable: false, raw: s };
+    }
+
+    function siteColorHex(color) {
+      var legacy = { purple: 'c8', blue: 'c1', teal: 'c10', yellow: 'c7', red: 'c4', emerald: 'c11', orange: 'c6', pink: 'c3', cyan: 'c10', indigo: 'c8' };
+      if (typeof COLOR_MAP !== 'undefined') {
+        var k = COLOR_MAP[color] ? color : (legacy[color] || 'c8');
+        if (COLOR_MAP[k]) return COLOR_MAP[k].main;
+      }
+      return '#8b5cf6';
+    }
+
+    // ---------------------------------------------------------------
+    // Three.js lazy loading
+    // ---------------------------------------------------------------
+    function loadScript(url) {
+      return new Promise(function (resolve, reject) {
+        var s = document.createElement('script');
+        s.src = url; s.async = false;
+        s.onload = resolve;
+        s.onerror = function () { reject(new Error('לא ניתן לטעון ' + url)); };
+        document.head.appendChild(s);
+      });
+    }
+    function loadThree() {
+      if (ms.loading) return ms.loading;
+      ms.loading = (window.THREE && THREE.OrbitControls && THREE.TransformControls) ? Promise.resolve() :
+        THREE_URLS.reduce(function (p, url) {
+          return p.then(function () {
+            if (url.indexOf('three.min.js') >= 0 && window.THREE) return;
+            return loadScript(url);
+          });
+        }, Promise.resolve());
+      return ms.loading;
+    }
+
+    function setOverlay(text, spinner) {
+      var o = $('ms-overlay');
+      if (!o) return;
+      if (!text) { o.classList.add('hidden'); return; }
+      o.classList.remove('hidden');
+      $('ms-overlay-text').textContent = text;
+      $('ms-overlay-spinner').classList.toggle('hidden', !spinner);
+    }
+
+    // ---------------------------------------------------------------
+    // Contract: project data + saved geometry
+    // ---------------------------------------------------------------
+    function ensureSchema() {
+      if (!state.modelSchema || typeof state.modelSchema !== 'object') state.modelSchema = { version: 1, lots: {}, buildings: {}, basements: {} };
+      ['lots', 'buildings', 'basements'].forEach(function (k) { if (!state.modelSchema[k] || typeof state.modelSchema[k] !== 'object') state.modelSchema[k] = {}; });
+      return state.modelSchema;
+    }
+
+    function buildContract() {
+      var schema = ensureSchema();
+      var lotCodes = [];
+      (state.mdcLots || []).forEach(function (l) {
+        var c = String(l && l.number || '').trim();
+        if (c && lotCodes.indexOf(c) < 0) lotCodes.push(c);
+      });
+
+      var buildings = [], seenB = {};
+      (state.mdcBuildings || []).forEach(function (b, idx) {
+        var code = String(b && b.name || '').trim();
+        if (!code || seenB[code]) return;
+        seenB[code] = true;
+        var lot = String(b.lot || '').trim();
+        buildings.push({ type: 'BUILDING', code: code, idx: idx, name: code, desc: b.desc || '',
+          lotCode: lotCodes.indexOf(lot) >= 0 ? lot : NONE_LOT, floors: parseFloors(b.floors) });
+      });
+
+      var basements = [], seenBs = {};
+      (state.mdcBasements || []).forEach(function (b, idx) {
+        var code = String(b && b.code || '').trim();
+        if (!code || seenBs[code]) return;
+        seenBs[code] = true;
+        var lots = splitList(b.lots).filter(function (l) { return lotCodes.indexOf(l) >= 0; });
+        var bNames = splitList(b.buildings);
+        if (!lots.length) {
+          bNames.forEach(function (n) {
+            var bb = buildings.filter(function (x) { return x.code === n; })[0];
+            if (bb && lots.indexOf(bb.lotCode) < 0) lots.push(bb.lotCode);
+          });
+        }
+        if (!lots.length) lots = [lotCodes[0] || NONE_LOT];
+        basements.push({ type: 'BASEMENT', code: code, idx: idx, name: code, desc: b.desc || '', lotCodes: lots,
+          buildingCodes: bNames, floors: parseFloors(b.floors) });
+      });
+
+      var needNone = buildings.some(function (b) { return b.lotCode === NONE_LOT; }) ||
+        basements.some(function (b) { return b.lotCodes.indexOf(NONE_LOT) >= 0; });
+      var lots = lotCodes.map(function (c) { return { type: 'LOT', code: c, name: 'מגרש ' + c }; });
+      if (needNone) lots.push({ type: 'LOT', code: NONE_LOT, name: 'ללא מגרש' });
+
+      var sites = (state.siteGroups || []).filter(function (g) { return g && Array.isArray(g.buildings); }).map(function (g) {
+        return { name: g.name || g.buildings.join('-'), color: siteColorHex(g.color),
+          buildingCodes: g.buildings.filter(function (n) { return seenB[n]; }) };
+      }).filter(function (s) { return s.buildingCodes.length; });
+
+      var options = (state.designOptions || []).filter(function (o) { return o && o.targetCode; }).map(function (o) {
+        return { targetCode: String(o.targetCode), isGroup: !!o.isGroupTarget, title: o.title || 'חלופה', desc: o.desc || '' };
+      });
+
+      var c = { lots: lots, buildings: buildings, basements: basements, sites: sites, options: options, schema: schema };
+      pruneSchema(c);
+      autoLayout(c);
+      lots.forEach(function (l) { l.geom = schema.lots[l.code]; });
+      buildings.forEach(function (b) { b.geom = schema.buildings[b.code]; });
+      basements.forEach(function (b) { b.geom = schema.basements[b.code]; });
+      return c;
+    }
+
+    // Drops saved geometry of lots/buildings/basements that no longer exist in step 1.
+    function pruneSchema(c) {
+      var keep = { lots: {}, buildings: {}, basements: {} };
+      c.lots.forEach(function (x) { keep.lots[x.code] = 1; });
+      c.buildings.forEach(function (x) { keep.buildings[x.code] = 1; });
+      c.basements.forEach(function (x) { keep.basements[x.code] = 1; });
+      ['lots', 'buildings', 'basements'].forEach(function (k) {
+        Object.keys(c.schema[k]).forEach(function (code) { if (!keep[k][code]) delete c.schema[k][code]; });
+      });
+    }
+
+    // Gives every entity without saved geometry a schematic place (lots in a row, buildings in a grid).
+    function autoLayout(c) {
+      var s = c.schema;
+      var cursor = null;
+      c.lots.forEach(function (l) {
+        var g = s.lots[l.code];
+        if (g && isFinite(g.posX) && isFinite(g.width)) {
+          var right = g.posX + g.width / 2;
+          cursor = cursor == null ? right : Math.max(cursor, right);
+        }
+      });
+      c.lots.forEach(function (l, i) {
+        var n = Math.max(1, c.buildings.filter(function (b) { return b.lotCode === l.code; }).length);
+        var cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols);
+        var g = s.lots[l.code];
+        if (!g || !isFinite(g.posX) || !isFinite(g.width) || !isFinite(g.depth) || !isFinite(g.posZ)) {
+          var w = Math.max(LOT_MIN, cols * BLDG_SIZE + (cols - 1) * BLDG_GAP + 2 * LOT_MARGIN);
+          var d = Math.max(LOT_MIN, rows * BLDG_SIZE + (rows - 1) * BLDG_GAP + 2 * LOT_MARGIN);
+          var left = cursor == null ? 0 : cursor + LOT_GAP;
+          g = s.lots[l.code] = { posX: r1(left + w / 2), posZ: 0, width: w, depth: d, color: (g && g.color) || LOT_COLORS[i % LOT_COLORS.length] };
+          cursor = left + w;
+        }
+        if (!g.color) g.color = LOT_COLORS[i % LOT_COLORS.length];
+      });
+
+      var slot = {};
+      c.buildings.forEach(function (b, i) {
+        var lot = s.lots[b.lotCode];
+        var k = slot[b.lotCode] = (slot[b.lotCode] || 0) + 1;
+        var g = s.buildings[b.code];
+        if (!g || !isFinite(g.relX) || !isFinite(g.relZ) || !isFinite(g.width) || !isFinite(g.depth)) {
+          var n = c.buildings.filter(function (x) { return x.lotCode === b.lotCode; }).length;
+          var cols = Math.ceil(Math.sqrt(n)), idx = k - 1;
+          var col = idx % cols, row = Math.floor(idx / cols);
+          var step = BLDG_SIZE + BLDG_GAP;
+          var rows = Math.ceil(n / cols);
+          g = s.buildings[b.code] = {
+            relX: r1((col - (cols - 1) / 2) * step), relZ: r1((row - (rows - 1) / 2) * step),
+            width: BLDG_SIZE, depth: BLDG_SIZE, color: (g && g.color) || BLDG_COLORS[i % BLDG_COLORS.length]
+          };
+        }
+        if (!g.color) g.color = BLDG_COLORS[i % BLDG_COLORS.length];
+        clampBuilding(g, lot);
+      });
+
+      c.basements.forEach(function (b) {
+        var g = s.basements[b.code];
+        var box = unionBox(b.lotCodes, s);
+        if (!g || !isFinite(g.posX) || !isFinite(g.posZ) || !isFinite(g.width) || !isFinite(g.depth)) {
+          g = s.basements[b.code] = { posX: r1((box.minX + box.maxX) / 2), posZ: r1((box.minZ + box.maxZ) / 2),
+            width: r1(box.maxX - box.minX), depth: r1(box.maxZ - box.minZ), color: (g && g.color) || BASEMENT_COLOR };
+        }
+        if (!g.color) g.color = BASEMENT_COLOR;
+        clampToBox(g, box);
+      });
+    }
+
+    function unionBox(lotCodes, schema) {
+      var box = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+      lotCodes.forEach(function (code) {
+        var l = schema.lots[code];
+        if (!l) return;
+        box.minX = Math.min(box.minX, l.posX - l.width / 2); box.maxX = Math.max(box.maxX, l.posX + l.width / 2);
+        box.minZ = Math.min(box.minZ, l.posZ - l.depth / 2); box.maxZ = Math.max(box.maxZ, l.posZ + l.depth / 2);
+      });
+      if (!isFinite(box.minX)) box = { minX: -15, maxX: 15, minZ: -15, maxZ: 15 };
+      return box;
+    }
+
+    // Keeps a footprint {posX,posZ,width,depth} inside a box (basements inside their lots).
+    function clampToBox(g, box) {
+      var bw = box.maxX - box.minX, bd = box.maxZ - box.minZ;
+      g.width = r1(Math.min(Math.max(MIN_SIZE, g.width), bw));
+      g.depth = r1(Math.min(Math.max(MIN_SIZE, g.depth), bd));
+      g.posX = r1(Math.min(Math.max(g.posX, box.minX + g.width / 2), box.maxX - g.width / 2));
+      g.posZ = r1(Math.min(Math.max(g.posZ, box.minZ + g.depth / 2), box.maxZ - g.depth / 2));
+    }
+
+    // Keeps a building (relative to its lot) inside the lot.
+    function clampBuilding(g, lot) {
+      if (!lot) return;
+      g.width = r1(Math.min(Math.max(MIN_SIZE, g.width), lot.width));
+      g.depth = r1(Math.min(Math.max(MIN_SIZE, g.depth), lot.depth));
+      var mx = (lot.width - g.width) / 2, mz = (lot.depth - g.depth) / 2;
+      g.relX = r1(Math.min(Math.max(g.relX, -mx), mx));
+      g.relZ = r1(Math.min(Math.max(g.relZ, -mz), mz));
+    }
+
+    function findEntity(key) {
+      if (!key || !ms.contract) return null;
+      var p = key.split('|'), type = p[0], code = p.slice(1).join('|');
+      var list = type === 'LOT' ? ms.contract.lots : type === 'BUILDING' ? ms.contract.buildings : ms.contract.basements;
+      return list.filter(function (e) { return e.code === code; })[0] || null;
+    }
+    function lotGeom(code) { return ms.contract.schema.lots[code]; }
+
+    function worldCenter(ent) {
+      var g = ent.geom;
+      if (ent.type === 'BUILDING') { var l = lotGeom(ent.lotCode); return { x: l.posX + g.relX, z: l.posZ + g.relZ }; }
+      return { x: g.posX, z: g.posZ };
+    }
+    function setWorldCenter(ent, x, z) {
+      var g = ent.geom;
+      if (ent.type === 'BUILDING') { var l = lotGeom(ent.lotCode); g.relX = r1(x - l.posX); g.relZ = r1(z - l.posZ); }
+      else { g.posX = r1(x); g.posZ = r1(z); }
+    }
+    function heightOf(ent) {
+      if (ent.type === 'BUILDING') return ent.floors.n * FLOOR_H;
+      if (ent.type === 'BASEMENT') return ent.floors.n * BASEMENT_H;
+      return 0;
+    }
+    function explodedY(ent) {
+      if (ent.type === 'BUILDING') return heightOf(ent) * 0.5 + 8;
+      if (ent.type === 'BASEMENT') return -heightOf(ent) - 10;
+      return 0;
+    }
+    function basementsOfLot(code) { return ms.contract.basements.filter(function (b) { return b.lotCodes.indexOf(code) >= 0; }); }
+    function buildingsOfLot(code) { return ms.contract.buildings.filter(function (b) { return b.lotCode === code; }); }
+
+    // After any lot change: keep its buildings and basements valid.
+    function reconcileLot(code) {
+      var lot = lotGeom(code);
+      buildingsOfLot(code).forEach(function (b) { clampBuilding(b.geom, lot); });
+      basementsOfLot(code).forEach(function (b) { clampToBox(b.geom, unionBox(b.lotCodes, ms.contract.schema)); });
+    }
+
+    // ---------------------------------------------------------------
+    // Scene
+    // ---------------------------------------------------------------
+    function init3D() {
+      var container = $('ms-canvas');
+      ms.scene = new THREE.Scene();
+      ms.scene.background = new THREE.Color(0xf8fafc);
+      ms.camera = new THREE.PerspectiveCamera(38, 1, 0.5, 5000);
+      ms.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); // needed for PNG export
+      ms.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      ms.renderer.shadowMap.enabled = true;
+      ms.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      container.appendChild(ms.renderer.domElement);
+
+      ms.controls = new THREE.OrbitControls(ms.camera, ms.renderer.domElement);
+      ms.controls.enableDamping = true;
+      ms.controls.dampingFactor = 0.06;
+      ms.controls.maxPolarAngle = Math.PI * 0.49;
+
+      ms.gizmo = new THREE.TransformControls(ms.camera, ms.renderer.domElement);
+      ms.gizmo.setMode('translate');
+      ms.gizmo.showY = false;
+      ms.scene.add(ms.gizmo);
+      ms.gizmo.addEventListener('dragging-changed', function (e) {
+        ms.controls.enabled = !e.value;
+        if (e.value) { pushUndo(); ms.gizmoStart = ms.gizmo.object ? ms.gizmo.object.position.clone() : null; }
+        else { onGizmoEnd(); }
+      });
+
+      ms.scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+      ms.light = new THREE.DirectionalLight(0xffffff, 0.6);
+      ms.light.castShadow = true;
+      ms.light.shadow.mapSize.width = 2048; ms.light.shadow.mapSize.height = 2048;
+      ms.light.shadow.bias = -0.0003;
+      ms.scene.add(ms.light); ms.scene.add(ms.light.target);
+
+      ms.raycaster = new THREE.Raycaster();
+      ms.mouse = new THREE.Vector2();
+      container.addEventListener('pointerdown', onPointerDown);
+      container.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      if (window.ResizeObserver) new ResizeObserver(resize).observe(container);
+      window.addEventListener('resize', resize);
+      resize();
+      ms.ready = true;
+      requestAnimationFrame(animate);
+    }
+
+    function resize() {
+      if (!ms.renderer) return;
+      var c = $('ms-canvas'), w = c.clientWidth, h = c.clientHeight;
+      if (!w || !h) return;
+      ms.camera.aspect = w / h;
+      ms.camera.updateProjectionMatrix();
+      ms.renderer.setSize(w, h);
+    }
+
+    function track(obj) { ms.objects.push(obj); ms.scene.add(obj); return obj; }
+
+    function disposeTracked() {
+      ms.objects.forEach(function (o) {
+        ms.scene.remove(o);
+        o.traverse(function (n) {
+          if (n.geometry) n.geometry.dispose();
+          if (n.material) (Array.isArray(n.material) ? n.material : [n.material]).forEach(function (m) { m.dispose(); });
+        });
+      });
+      ms.objects = []; ms.pickables = []; ms.groups = {}; ms.labels = []; ms.xray = {}; ms.bMeshes = [];
+    }
+
+    function edgeLines(geom, color, opacity, dashed) {
+      var edges = new THREE.EdgesGeometry(geom);
+      var mat = dashed ? new THREE.LineDashedMaterial({ color: color, dashSize: 1.2, gapSize: 0.7, transparent: true, opacity: opacity })
+        : new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: opacity });
+      var lines = new THREE.LineSegments(edges, mat);
+      if (dashed) lines.computeLineDistances();
+      return lines;
+    }
+
+    function levelRings(mesh, w, d, levels, levelH, totalH, color, opacity) {
+      for (var i = 1; i < levels; i++) {
+        var ring = edgeLines(new THREE.PlaneGeometry(w, d), color, opacity, false);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.y = i * levelH - totalH / 2;
+        mesh.add(ring);
+      }
+    }
+
+    function rebuild() {
+      if (!ms.ready || !ms.contract) return;
+      ms.gizmo.detach();
+      clearArrows();
+      if (ms.highlight) { ms.scene.remove(ms.highlight); ms.highlight = null; }
+      disposeTracked();
+      var c = ms.contract;
+
+      // Lots: translucent plane + dashed blue boundary
+      c.lots.forEach(function (l) {
+        var g = l.geom, group = new THREE.Group();
+        var geom = new THREE.PlaneGeometry(g.width, g.depth);
+        var mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: hexNum(g.color), side: THREE.DoubleSide, transparent: true, opacity: l.code === NONE_LOT ? 0.18 : 0.38, roughness: 0.6 }));
+        mesh.rotation.x = -Math.PI / 2; mesh.receiveShadow = true;
+        var border = edgeLines(geom, l.code === NONE_LOT ? 0x94a3b8 : 0x2563eb, 0.9, true);
+        border.rotation.x = -Math.PI / 2;
+        group.add(mesh); group.add(border);
+        group.position.set(g.posX, 0.02, g.posZ);
+        addEntityGroup(group, l, mesh, new THREE.Vector3(0, 0, g.depth / 2));   // label on the lot's front edge
+      });
+
+      // Buildings: boxes with a ring per floor
+      c.buildings.forEach(function (b) {
+        var g = b.geom, lot = lotGeom(b.lotCode), h = heightOf(b), group = new THREE.Group();
+        var geom = new THREE.BoxGeometry(g.width, h, g.depth);
+        var mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: hexNum(g.color), roughness: 0.35, metalness: 0.05 }));
+        mesh.castShadow = true; mesh.receiveShadow = true; mesh.position.y = h / 2;
+        mesh.add(edgeLines(geom, 0xffffff, 0.7, false));
+        levelRings(mesh, g.width, g.depth, b.floors.n, FLOOR_H, h, 0xffffff, 0.35);
+        group.add(mesh);
+        // X-ray outline: drawn through other buildings, shown only while this one is hidden from view
+        var xray = new THREE.LineSegments(new THREE.EdgesGeometry(geom), new THREE.LineDashedMaterial({ color: 0x0f172a, dashSize: 1, gapSize: 0.6, depthTest: false, transparent: true, opacity: 0.9 }));
+        xray.computeLineDistances();
+        xray.position.y = h / 2; xray.visible = false; xray.renderOrder = 998;
+        group.add(xray);
+        ms.xray[keyOf('BUILDING', b.code)] = xray;
+        ms.bMeshes.push(mesh);
+        group.position.set(lot.posX + g.relX, 0, lot.posZ + g.relZ);
+        addEntityGroup(group, b, mesh, new THREE.Vector3(0, h, 0));           // label pin on the roof
+      });
+
+      // Basements: below ground, one box across all their lots
+      c.basements.forEach(function (b) {
+        var g = b.geom, h = heightOf(b), group = new THREE.Group();
+        var geom = new THREE.BoxGeometry(g.width, h, g.depth);
+        var mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: hexNum(g.color), transparent: true, opacity: 0.55, roughness: 0.25 }));
+        mesh.position.y = -h / 2;
+        mesh.add(edgeLines(geom, 0xd97706, 0.7, false));
+        levelRings(mesh, g.width, g.depth, b.floors.n, BASEMENT_H, h, 0xd97706, 0.4);
+        group.add(mesh);
+        group.position.set(g.posX, 0, g.posZ);
+        addEntityGroup(group, b, mesh, new THREE.Vector3(0, -h, g.depth / 2));  // label under the front-bottom edge
+      });
+
+      buildSites(c);
+      if (ms.showOptions) buildOptionGhosts(c);
+      buildDotGrid(c);
+      aimLight(c);
+      buildLabels();
+      ms.scene.updateMatrixWorld();
+      ms.lastOcc = 0;
+
+      if (ms.selected && ms.groups[ms.selected]) attachSelection();
+      else if (ms.selected) deselect();
+      renderTree();
+      renderProps();
+    }
+
+    function addEntityGroup(group, ent, mesh, labelAnchor) {
+      var key = keyOf(ent.type, ent.code);
+      group.userData = { key: key, baseY: 0, explodedY: explodedY(ent), anchor: labelAnchor };
+      mesh.userData.key = key;
+      track(group);
+      ms.groups[key] = group;
+      ms.pickables.push(mesh);
+    }
+
+    function footprintBox(codes) {
+      var box = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity, maxH: 0 };
+      codes.forEach(function (code) {
+        var b = ms.contract.buildings.filter(function (x) { return x.code === code; })[0];
+        if (!b) return;
+        var cc = worldCenter(b), g = b.geom;
+        box.minX = Math.min(box.minX, cc.x - g.width / 2); box.maxX = Math.max(box.maxX, cc.x + g.width / 2);
+        box.minZ = Math.min(box.minZ, cc.z - g.depth / 2); box.maxZ = Math.max(box.maxZ, cc.z + g.depth / 2);
+        box.maxH = Math.max(box.maxH, heightOf(b));
+      });
+      return isFinite(box.minX) ? box : null;
+    }
+
+    // Sites (shared site models): coloured dashed outline around their buildings.
+    function buildSites(c) {
+      c.sites.forEach(function (site, i) {
+        var box = footprintBox(site.buildingCodes);
+        if (!box) return;
+        var pad = 2 + i * 0.6;
+        var w = box.maxX - box.minX + 2 * pad, d = box.maxZ - box.minZ + 2 * pad;
+        var outline = edgeLines(new THREE.PlaneGeometry(w, d), hexNum(site.color), 1, true);
+        outline.rotation.x = -Math.PI / 2;
+        outline.position.set((box.minX + box.maxX) / 2, 0.06 + i * 0.01, (box.minZ + box.maxZ) / 2);
+        track(outline);
+        ms.labels.push({ kind: 'SITE', site: site, pos: new THREE.Vector3(box.minX - pad, 0.1, box.minZ - pad) });
+      });
+    }
+
+    // Design options: transparent purple "ghost" of the target next to it.
+    function buildOptionGhosts(c) {
+      var perTarget = {};
+      c.options.forEach(function (opt) {
+        var codes = opt.isGroup ? ((c.sites.filter(function (s) { return s.name === opt.targetCode; })[0] || {}).buildingCodes || opt.targetCode.split('-'))
+          : [opt.targetCode];
+        var box = footprintBox(codes);
+        if (!box) return;
+        var n = perTarget[opt.targetCode] = (perTarget[opt.targetCode] || 0) + 1;
+        var w = box.maxX - box.minX, d = box.maxZ - box.minZ, h = Math.max(box.maxH, FLOOR_H);
+        var geom = new THREE.BoxGeometry(w, h, d);
+        var ghost = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x8b5cf6, transparent: true, opacity: 0.12, depthWrite: false }));
+        ghost.add(edgeLines(geom, 0x7c3aed, 0.8, true));
+        var group = new THREE.Group();
+        group.add(ghost);
+        ghost.position.y = h / 2;
+        var lotCodes = codes.map(function (code) { var b = c.buildings.filter(function (x) { return x.code === code; })[0]; return b && b.lotCode; }).filter(Boolean);
+        var edgeZ = Math.min(box.minZ, unionBox(lotCodes, c.schema).minZ); // behind the lot, away from the default camera
+        group.position.set((box.minX + box.maxX) / 2, 0, edgeZ - 4 - d / 2 - (n - 1) * (d + 4));
+        group.userData = { baseY: 0, explodedY: h * 0.5 + 8 };
+        track(group);
+        ms.labels.push({ kind: 'OPTION', option: opt, obj: group, anchor: new THREE.Vector3(0, h, 0) });
+      });
+    }
+
+    function sceneBounds() {
+      var box = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+      ms.contract.lots.forEach(function (l) {
+        var g = l.geom;
+        box.minX = Math.min(box.minX, g.posX - g.width / 2); box.maxX = Math.max(box.maxX, g.posX + g.width / 2);
+        box.minZ = Math.min(box.minZ, g.posZ - g.depth / 2); box.maxZ = Math.max(box.maxZ, g.posZ + g.depth / 2);
+      });
+      if (!isFinite(box.minX)) box = { minX: -20, maxX: 20, minZ: -20, maxZ: 20 };
+      if (ms.showOptions && ms.contract.options.length) box.minZ -= 26; // keep option ghosts in view
+      var maxH = 0;
+      ms.contract.buildings.forEach(function (b) { maxH = Math.max(maxH, heightOf(b)); });
+      box.cx = (box.minX + box.maxX) / 2; box.cz = (box.minZ + box.maxZ) / 2;
+      box.r = Math.max(box.maxX - box.minX, box.maxZ - box.minZ, maxH, 30) / 2;
+      box.maxH = maxH;
+      return box;
+    }
+
+    function buildDotGrid() {
+      var b = sceneBounds(), spacing = 5, ext = Math.ceil((b.r * 1.8) / spacing) * spacing, pos = [];
+      for (var x = -ext; x <= ext; x += spacing) for (var z = -ext; z <= ext; z += spacing) pos.push(b.cx + x, -0.01, b.cz + z);
+      var geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      track(new THREE.Points(geom, new THREE.PointsMaterial({ size: 0.25, color: 0x94a3b8, transparent: true, opacity: 0.5 })));
+    }
+
+    function aimLight() {
+      var b = sceneBounds(), r = b.r * 1.6;
+      ms.light.position.set(b.cx + r * 0.6, Math.max(b.maxH, 20) + r, b.cz + r * 0.6);
+      ms.light.target.position.set(b.cx, 0, b.cz);
+      var cam = ms.light.shadow.camera;
+      cam.left = -r; cam.right = r; cam.top = r; cam.bottom = -r; cam.near = 1; cam.far = r * 6 + b.maxH;
+      cam.updateProjectionMatrix();
+    }
+
+    function fitView() {
+      if (!ms.ready || !ms.contract) return;
+      var b = sceneBounds(), dist = b.r * 3.2 + 14;
+      // Shift the view centre toward screen-right so the scene clears the tree panel on the right.
+      var k = b.r * 0.45, tx = b.cx + 0.78 * k, tz = b.cz - 0.62 * k;
+      ms.controls.target.set(tx, Math.min(b.maxH * 0.25, 10), tz);
+      ms.camera.position.set(tx + dist * 0.62, dist * 0.55, tz + dist * 0.78);
+      ms.camera.far = dist * 20; ms.camera.updateProjectionMatrix();
+      ms.controls.update();
+    }
+
+    // Zoom buttons: move the camera toward / away from the orbit target.
+    function zoom(factor) {
+      if (!ms.ready) return;
+      var offset = ms.camera.position.clone().sub(ms.controls.target);
+      var dist = Math.min(Math.max(offset.length() * factor, 8), ms.camera.far * 0.5);
+      offset.setLength(dist);
+      ms.camera.position.copy(ms.controls.target).add(offset);
+      ms.controls.update();
+    }
+
+    // ---------------------------------------------------------------
+    // PNG export: 3D view + labels + title/legend, downloaded and saved to BIM/BEP in Drive
+    // ---------------------------------------------------------------
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+    }
+
+    // Draws a pill (same look as the on-screen label) centred at cx with its top at `top`.
+    function drawPill(ctx, cx, top, l, scale) {
+      var theme = l.kind === 'OPTION' ? { bg: '#f5f3ff', border: '#c4b5fd', text: '#5b21b6' }
+        : l.kind === 'BASEMENT' ? { bg: '#fffbeb', border: '#fcd34d', text: '#92400e' }
+        : l.kind === 'LOT' ? { bg: 'rgba(255,255,255,.75)', border: null, text: '#1d4ed8' }
+        : l.kind === 'SITE' ? { bg: l.site.color, border: null, text: '#ffffff' }
+        : { bg: '#ffffff', border: '#cbd5e1', text: '#0f172a' };
+      var label = l.text + (l.sub ? ' · ' + l.sub : '');
+      ctx.font = '800 ' + (11 * scale) + 'px Assistant, Arial, sans-serif';
+      var w = ctx.measureText(label).width + 12 * scale, h = 18 * scale;
+      ctx.globalAlpha = l.occluded ? 0.6 : 1;
+      roundRect(ctx, cx - w / 2, top, w, h, 5 * scale);
+      ctx.fillStyle = theme.bg; ctx.fill();
+      if (theme.border) { ctx.strokeStyle = theme.border; ctx.lineWidth = scale; ctx.stroke(); }
+      ctx.fillStyle = theme.text; ctx.direction = 'rtl'; ctx.textAlign = 'center';
+      ctx.fillText(label, cx, top + 13 * scale);
+      ctx.globalAlpha = 1;
+    }
+    function composeImage() {
+      // Clean frame: no selection box, arrows or move gizmo.
+      var hadHighlight = ms.highlight, gizmoObj = ms.gizmo.object;
+      if (hadHighlight) hadHighlight.visible = false;
+      ms.arrows.forEach(function (a) { a.visible = false; });
+      if (gizmoObj) ms.gizmo.detach();
+      ms.renderer.render(ms.scene, ms.camera);
+      var src = ms.renderer.domElement;
+      var out = document.createElement('canvas');
+      out.width = src.width; out.height = src.height;
+      var ctx = out.getContext('2d'), scale = src.width / Math.max(1, $('ms-canvas').clientWidth);
+      ctx.fillStyle = '#f8fafc'; ctx.fillRect(0, 0, out.width, out.height);
+      ctx.drawImage(src, 0, 0);
+      if (hadHighlight) hadHighlight.visible = true;
+      ms.arrows.forEach(function (a) { a.visible = true; });
+      if (gizmoObj) ms.gizmo.attach(gizmoObj);
+
+      // Labels exactly as laid out on screen (pins + leader lines)
+      positionLabels();
+      ms.labels.forEach(function (l) {
+        if (!l.visible || l.sx == null) return;
+        var x = l.sx * scale, y = l.sy * scale;
+        if (l.leader) {
+          var lift = (l.lift || PIN_LIFT) * scale, color = l.kind === 'OPTION' ? '#7c3aed' : '#475569';
+          ctx.strokeStyle = color; ctx.lineWidth = 1.5 * scale;
+          ctx.setLineDash(l.occluded ? [4 * scale, 3 * scale] : []);
+          ctx.beginPath(); ctx.moveTo(x, y - 3 * scale); ctx.lineTo(x, y - 3 * scale - lift); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y - 3 * scale, 3 * scale, 0, Math.PI * 2); ctx.fill();
+          drawPill(ctx, x, y - 6 * scale - lift - 18 * scale, l, scale);
+        } else if (l.kind === 'BASEMENT') drawPill(ctx, x, y + 6 * scale, l, scale);
+        else drawPill(ctx, x, y - 9 * scale, l, scale);
+      });
+      // Title block (top-right) + legend (bottom-right)
+      var p = state.selectedProject || {}, c = ms.contract;
+      var title = 'סכמת מודל • ' + (p.no || '') + ' ' + (p.name || '');
+      var sub = c.lots.filter(function (l) { return l.code !== NONE_LOT; }).length + ' מגרשים • ' + c.buildings.length + ' מבנים • ' +
+        c.basements.length + ' מרתפים • ' + c.sites.length + ' אתרים • ' + c.options.length + ' חלופות';
+      var date = new Date().toLocaleDateString('he-IL');
+      ctx.direction = 'rtl'; ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(255,255,255,.92)'; roundRect(ctx, out.width - 440 * scale, 14 * scale, 426 * scale, 58 * scale, 12 * scale); ctx.fill();
+      ctx.fillStyle = '#0f172a'; ctx.font = '800 ' + (17 * scale) + 'px Assistant, Arial, sans-serif';
+      ctx.fillText(title, out.width - 28 * scale, 38 * scale);
+      ctx.fillStyle = '#64748b'; ctx.font = '600 ' + (11 * scale) + 'px Assistant, Arial, sans-serif';
+      ctx.fillText(sub + '  |  ' + date + '  |  AMEC BIMBOT', out.width - 28 * scale, 58 * scale);
+      var legend = [['מגרש', '#2563eb'], ['מבנה', '#475569'], ['מרתף', '#d97706'], ['חלופה', '#7c3aed'], ['- - מוסתר', '#0f172a']];
+      var ly = out.height - 16 * scale, lx = out.width - 24 * scale;
+      ctx.font = '700 ' + (11 * scale) + 'px Assistant, Arial, sans-serif';
+      legend.forEach(function (item) {
+        ctx.fillStyle = item[1]; ctx.beginPath(); ctx.arc(lx - 4 * scale, ly - 4 * scale, 4 * scale, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#334155'; ctx.fillText(item[0], lx - 12 * scale, ly);
+        lx -= (ctx.measureText(item[0]).width + 32 * scale);
+      });
+      return out.toDataURL('image/png');
+    }
+
+    function exportPng() {
+      if (!ms.ready || !ms.contract) return;
+      var btn = $('ms-btn-png'), p = state.selectedProject;
+      if (!p) return;
+      var dataUrl;
+      try { dataUrl = composeImage(); } catch (e) { note('יצירת התמונה נכשלה: ' + e.message); return; }
+      // 1) Download to the computer
+      var a = document.createElement('a');
+      var stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      a.href = dataUrl; a.download = p.no + ' - סכמת מודל - ' + stamp + '.png';
+      document.body.appendChild(a); a.click(); a.remove();
+      // 2) Save a copy in the project's BIM/BEP folder
+      btn.disabled = true; btn.textContent = 'שומר ב-Drive...';
+      var projectNo = String(p.no);
+      google.script.run.withSuccessHandler(function (res) {
+        btn.disabled = false; btn.textContent = '⬇ PNG';
+        if (res && res.success) {
+          note('נשמר גם ב-Drive: ' + res.folderName + ' / ' + res.name);
+          if (typeof showToast === 'function' && state.selectedProject && String(state.selectedProject.no) === projectNo) showToast('התמונה נשמרה בתיקיית ' + res.folderName + ' של הפרויקט', 'success');
+          ms.lastPngUrl = res.url;
+        } else if (typeof showToast === 'function') showToast('ההורדה בוצעה, אך השמירה ב-Drive נכשלה: ' + ((res && res.error) || 'שגיאה'), 'error');
+      }).withFailureHandler(function (err) {
+        btn.disabled = false; btn.textContent = '⬇ PNG';
+        if (typeof showToast === 'function') showToast('ההורדה בוצעה, אך השמירה ב-Drive נכשלה: ' + err.message, 'error');
+      }).saveModelSchemaImage(p.folderId, p.no, p.name, dataUrl);
+    }
+
+    // ---------------------------------------------------------------
+    // Labels: small pins above each roof with a leader line down to it.
+    // DOM built once per rebuild; positioned every frame; pins lift to avoid overlapping.
+    // ---------------------------------------------------------------
+    var PIN_LIFT = 14, PIN_STEP = 12, PIN_MAX_STEPS = 16;
+
+    function pinHtml(text, sub, extra, tone) {
+      var border = tone === 'option' ? 'border-purple-300 bg-purple-50/95 text-purple-800' : 'border-slate-300 bg-white/95 text-slate-900';
+      var line = tone === 'option' ? '#7c3aed' : '#475569';
+      return '<div data-pill class="pointer-events-auto cursor-pointer flex items-center gap-1 rounded-md border ' + border + ' px-1.5 py-0.5 text-[11px] font-extrabold shadow-sm whitespace-nowrap" dir="rtl">' +
+        esc(text) + (sub ? '<span class="font-semibold text-slate-500">· ' + esc(sub) + '</span>' : '') + (extra || '') + '</div>' +
+        '<div data-leader style="width:0;border-left:1.5px solid ' + line + '"></div>' +
+        '<div style="width:6px;height:6px;border-radius:9999px;background:' + line + '"></div>';
+    }
+
+    function buildLabels() {
+      var layer = $('ms-labels');
+      var extra = ms.labels.slice();               // SITE / OPTION entries added by buildSites / buildOptionGhosts
+      layer.innerHTML = '';
+      ms.labels = [];
+      var c = ms.contract, optCount = {};
+      c.options.forEach(function (o) { if (!o.isGroup) optCount[o.targetCode] = (optCount[o.targetCode] || 0) + 1; });
+
+      c.lots.concat(c.buildings, c.basements).forEach(function (ent) {
+        var key = keyOf(ent.type, ent.code), group = ms.groups[key];
+        if (!group) return;
+        var el = document.createElement('div'), floors = ent.floors ? (ent.floors.raw || '?') : '';
+        if (ent.type === 'BUILDING') {
+          el.className = 'absolute pointer-events-none flex flex-col items-center';
+          el.style.transform = 'translate(-50%, -100%)';
+          el.innerHTML = pinHtml(ent.name, floors + ' ק׳', optCount[ent.code] ? '<span class="text-purple-600">◆' + optCount[ent.code] + '</span>' : '', 'building');
+        } else if (ent.type === 'LOT') {
+          el.className = 'absolute pointer-events-none';
+          el.style.transform = 'translate(-50%, -50%)';
+          el.innerHTML = '<div data-pill class="pointer-events-auto cursor-pointer rounded px-1.5 text-[10px] font-bold text-blue-700 bg-white/75 whitespace-nowrap" dir="rtl">' + esc(ent.name) + '</div>';
+        } else {
+          el.className = 'absolute pointer-events-none';
+          el.style.transform = 'translate(-50%, 6px)';
+          el.innerHTML = '<div data-pill class="pointer-events-auto cursor-pointer rounded-md border border-amber-300 bg-amber-50/95 px-1.5 py-0.5 text-[10px] font-extrabold text-amber-800 shadow-sm whitespace-nowrap" dir="rtl">' + esc(ent.name) + ' · ' + esc(floors) + ' מפ׳</div>';
+        }
+        var pill = el.querySelector('[data-pill]');
+        pill.addEventListener('click', function () { select(key); });
+        if (ent.type === 'BUILDING') {
+          pill.addEventListener('mouseenter', function () { ms.hover = key; ms.lastOcc = 0; });
+          pill.addEventListener('mouseleave', function () { if (ms.hover === key) { ms.hover = null; ms.lastOcc = 0; } });
+        }
+        layer.appendChild(el);
+        ms.labels.push({ kind: ent.type, el: el, pill: pill, leader: el.querySelector('[data-leader]'), obj: group, anchor: group.userData.anchor, key: key, text: ent.name, sub: ent.type === 'BUILDING' ? floors + ' ק׳' : ent.type === 'BASEMENT' ? floors + ' מפ׳' : '' });
+      });
+
+      extra.forEach(function (l) {
+        var el = document.createElement('div');
+        if (l.kind === 'SITE') {
+          el.className = 'absolute pointer-events-none';
+          el.style.transform = 'translate(-50%, -50%)';
+          el.innerHTML = '<div data-pill class="rounded px-1.5 py-0.5 text-[10px] font-extrabold text-white shadow-sm whitespace-nowrap" style="background:' + esc(l.site.color) + '">אתר ' + esc(l.site.name) + '</div>';
+          l.text = 'אתר ' + l.site.name;
+        } else {
+          el.className = 'absolute pointer-events-none flex flex-col items-center';
+          el.style.transform = 'translate(-50%, -100%)';
+          el.innerHTML = pinHtml('◆ ' + l.option.title, l.option.targetCode, '', 'option');
+          l.text = '◆ ' + l.option.title; l.sub = l.option.targetCode;
+        }
+        layer.appendChild(el);
+        l.el = el; l.pill = el.querySelector('[data-pill]'); l.leader = el.querySelector('[data-leader]');
+        ms.labels.push(l);
+      });
+    }
+
+    var tmpV = null;
+    function positionLabels() {
+      var c = $('ms-canvas'), w = c.clientWidth, h = c.clientHeight;
+      if (!tmpV) tmpV = new THREE.Vector3();
+      var placed = [], pins = [];
+      ms.labels.forEach(function (l) {
+        if (!l.el) return;
+        if (l.obj) { tmpV.copy(l.anchor || new THREE.Vector3()); l.obj.localToWorld(tmpV); } else tmpV.copy(l.pos);
+        tmpV.project(ms.camera);
+        l.visible = !(tmpV.z > 1 || tmpV.z < -1);
+        if (!l.visible) { l.el.style.display = 'none'; return; }
+        l.el.style.display = '';
+        l.sx = (tmpV.x * 0.5 + 0.5) * w; l.sy = (-tmpV.y * 0.5 + 0.5) * h;
+        if (!l.pw) { l.pw = l.pill.offsetWidth; l.ph = l.pill.offsetHeight; }
+        l.el.style.left = l.sx + 'px'; l.el.style.top = l.sy + 'px';
+        if (l.leader) pins.push(l);
+        else {
+          var top = l.kind === 'BASEMENT' ? l.sy + 6 : l.sy - l.ph / 2;
+          placed.push({ l: l.sx - l.pw / 2, r: l.sx + l.pw / 2, t: top, b: top + l.ph });
+        }
+        if (l.key) {
+          var on = l.key === ms.selected;
+          l.pill.classList.toggle('ring-2', on); l.pill.classList.toggle('ring-blue-500', on);
+          l.el.style.zIndex = on ? '30' : (l.occluded ? '15' : '20');
+        }
+      });
+      // Lowest pins first; a pin that would overlap an already-placed label is lifted higher.
+      pins.sort(function (a, b) { return b.sy - a.sy; });
+      pins.forEach(function (l) {
+        var lift = PIN_LIFT, r;
+        for (var i = 0; i < PIN_MAX_STEPS; i++) {
+          r = { l: l.sx - l.pw / 2 - 3, r: l.sx + l.pw / 2 + 3, t: l.sy - 6 - lift - l.ph, b: l.sy - 6 - lift };
+          if (!placed.some(function (p) { return p.l < r.r && p.r > r.l && p.t < r.b && p.b > r.t; })) break;
+          lift += PIN_STEP;
+        }
+        placed.push(r);
+        l.lift = lift;
+        l.leader.style.height = lift + 'px';
+      });
+    }
+
+    // Which buildings are hidden behind others from the current point of view.
+    // Hidden: faded pin + dashed leader + dashed outline drawn through the buildings in front.
+    // Hovering / selecting a hidden building makes the buildings in front of it see-through.
+    function updateOcclusion() {
+      var cam = ms.camera.position, dir = new THREE.Vector3(), target = new THREE.Vector3(), rc = new THREE.Raycaster();
+      ms.scene.updateMatrixWorld();          // positions must be current before ray tests
+      var focus = ms.hover || (ms.selected && ms.selected.indexOf('BUILDING|') === 0 ? ms.selected : null);
+      var seeThrough = {};
+      ms.labels.forEach(function (l) {
+        if (l.kind !== 'BUILDING' || !l.obj) return;
+        target.copy(l.anchor); l.obj.localToWorld(target); target.y -= 0.3;
+        dir.copy(target).sub(cam);
+        var dist = dir.length();
+        rc.set(cam, dir.normalize());
+        var blockers = rc.intersectObjects(ms.bMeshes, false)
+          .filter(function (hit) { return hit.distance < dist - 0.5 && hit.object.userData.key !== l.key; })
+          .map(function (hit) { return hit.object.userData.key; });
+        l.occluded = blockers.length > 0;
+        l.blockers = blockers;
+        if (l.key === focus) blockers.forEach(function (k) { seeThrough[k] = true; });
+      });
+      ms.bMeshes.forEach(function (m) {
+        var thin = !!(ms.xrayAll || seeThrough[m.userData.key]);
+        if (m.userData.thin === thin) return;
+        m.userData.thin = thin;
+        m.material.transparent = thin; m.material.opacity = thin ? 0.22 : 1; m.material.depthWrite = !thin;
+        m.material.needsUpdate = true;
+      });
+      ms.labels.forEach(function (l) {
+        if (l.kind !== 'BUILDING') return;
+        var x = ms.xray[l.key];
+        if (x) x.visible = !!(l.occluded || ms.xrayAll);
+        l.pill.style.opacity = l.occluded ? '0.6' : '';
+        l.pill.title = l.occluded ? 'מוסתר מנקודת המבט הזו מאחורי: ' + l.blockers.map(function (k) { return k.split('|')[1]; }).join(', ') + ' — מעבר עם העכבר מציג אותו' : '';
+        if (l.leader) l.leader.style.borderLeftStyle = l.occluded ? 'dashed' : 'solid';
+      });
+    }
+    function isVisible() { var c = $('ms-canvas'); return !!(c && c.offsetParent !== null && c.clientWidth > 0); }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      if (!isVisible()) return;              // paused while step 5 is hidden
+      ms.controls.update();
+      if (ms.highlight) ms.highlight.update();
+      ms.objects.forEach(function (o) {
+        if (o.userData && o.userData.explodedY !== undefined && !(ms.gizmo.dragging && ms.gizmo.object === o)) {
+          var target = THREE.MathUtils.lerp(o.userData.baseY, o.userData.explodedY, ms.explode);
+          o.position.y = THREE.MathUtils.lerp(o.position.y, target, 0.12);
+        }
+      });
+      var now = Date.now();
+      if (now - (ms.lastOcc || 0) > 150) { ms.lastOcc = now; updateOcclusion(); }
+      positionLabels();
+      ms.renderer.render(ms.scene, ms.camera);
+    }
+
+    // ---------------------------------------------------------------
+    // Selection, push/pull arrows, move gizmo
+    // ---------------------------------------------------------------
+    function select(key) {
+      if (!findEntity(key)) return;
+      ms.selected = key;
+      attachSelection();
+      renderTree(); renderProps(); renderToolbar();
+    }
+
+    function deselect() {
+      ms.selected = null;
+      if (ms.gizmo) ms.gizmo.detach();
+      clearArrows();
+      if (ms.highlight) { ms.scene.remove(ms.highlight); ms.highlight = null; }
+      $('ms-toolbar').classList.add('hidden');
+      $('ms-props').classList.add('hidden');
+      renderTree();
+    }
+
+    function attachSelection() {
+      var group = ms.groups[ms.selected];
+      if (!group) return;
+      if (ms.highlight) ms.scene.remove(ms.highlight);
+      ms.highlight = new THREE.BoxHelper(group, 0x2563eb);
+      ms.scene.add(ms.highlight);
+      if (ms.mode === 'move') { clearArrows(); ms.gizmo.attach(group); }
+      else { ms.gizmo.detach(); createArrows(findEntity(ms.selected)); }
+      renderToolbar();
+    }
+
+    // Building arrows sit against the facade (up to ~8 m high) so they aren't lost among ground labels.
+    function arrowY(ent) {
+      if (ent.type === 'LOT') return 0.6;
+      var lift = ent.type === 'BUILDING' ? Math.min(heightOf(ent) * 0.5, 8) : 0.6;
+      return explodedY(ent) * ms.explode + lift;
+    }
+
+    function createArrows(ent) {
+      clearArrows();
+      if (!ent) return;
+      // Building = red, basement = green, lot = blue. Drawn on top of everything so they're never hidden.
+      var color = ARROW_COLORS[ent.type];
+      var cc = worldCenter(ent), g = ent.geom, y = arrowY(ent), size = Math.max(2.6, Math.min(g.width, g.depth) / 4.5);
+      [['+X', 1, 0], ['-X', -1, 0], ['+Z', 0, 1], ['-Z', 0, -1]].forEach(function (a) {
+        var dx = a[1], dz = a[2];
+        var arrow = new THREE.Group();
+        var headMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, transparent: true, opacity: 0.95 });
+        var shaftMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, transparent: true, opacity: 0.85 });
+        var head = new THREE.Mesh(new THREE.ConeGeometry(size * 0.55, size * 1.3, 20), headMat);
+        var shaft = new THREE.Mesh(new THREE.CylinderGeometry(size * 0.16, size * 0.16, size * 1.1, 12), shaftMat);
+        head.position.y = size * 1.2; shaft.position.y = size * 0.3;   // along the arrow's local +Y
+        arrow.add(shaft); arrow.add(head);
+        if (dx === 1) arrow.rotation.z = -Math.PI / 2;
+        else if (dx === -1) arrow.rotation.z = Math.PI / 2;
+        else if (dz === 1) arrow.rotation.x = Math.PI / 2;
+        else arrow.rotation.x = -Math.PI / 2;
+        arrow.position.set(cc.x + dx * (g.width / 2 + size * 0.3), y, cc.z + dz * (g.depth / 2 + size * 0.3));
+        arrow.renderOrder = 999;
+        arrow.traverse(function (n) { n.renderOrder = 999; n.userData = { arrowDir: a[0] }; });
+        ms.scene.add(arrow);
+        ms.arrows.push(arrow);
+      });
+    }
+
+    function clearArrows() {
+      ms.arrows.forEach(function (a) {
+        ms.scene.remove(a);
+        a.traverse(function (n) { if (n.geometry) n.geometry.dispose(); if (n.material) n.material.dispose(); });
+      });
+      ms.arrows = [];
+    }
+
+    function setMouse(e) {
+      var rect = $('ms-canvas').getBoundingClientRect();
+      ms.mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      ms.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      ms.raycaster.setFromCamera(ms.mouse, ms.camera);
+    }
+
+    function onPointerDown(e) {
+      if (!ms.ready || ms.gizmo.dragging || e.button !== 0) return;
+      setMouse(e);
+      var hitArrow = ms.raycaster.intersectObjects(ms.arrows, true)[0];
+      if (hitArrow) {
+        var ent = findEntity(ms.selected);
+        pushUndo();
+        ms.drag = { dir: hitArrow.object.userData.arrowDir, key: ms.selected, plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -arrowY(ent)) };
+        ms.controls.enabled = false;
+        return;
+      }
+      var hit = ms.raycaster.intersectObjects(ms.pickables)[0];
+      if (hit) select(hit.object.userData.key);
+      else if (!ms.gizmo.axis) deselect();
+    }
+
+    function onPointerMove(e) {
+      if (!ms.drag) return;
+      setMouse(e);
+      var p = new THREE.Vector3();
+      if (!ms.raycaster.ray.intersectPlane(ms.drag.plane, p)) return;
+      var ent = findEntity(ms.drag.key);
+      if (!ent) return;
+      pushPull(ent, ms.drag.dir, p);
+      rebuild();
+    }
+
+    function onPointerUp() {
+      if (!ms.drag) return;
+      ms.drag = null;
+      ms.controls.enabled = true;
+      commit();
+    }
+
+    // Moves one face; the opposite face stays fixed. Lot stretch keeps buildings in place (world anchor).
+    function pushPull(ent, dir, point) {
+      var g = ent.geom, cc = worldCenter(ent), axis = dir[1], sign = dir[0] === '+' ? 1 : -1;
+      var sizeKey = axis === 'X' ? 'width' : 'depth';
+      var centre = axis === 'X' ? cc.x : cc.z, p = axis === 'X' ? point.x : point.z;
+      var fixed = centre - sign * g[sizeKey] / 2;
+      var size = Math.max(MIN_SIZE, r1((p - fixed) * sign));
+      var newCentre = fixed + sign * size / 2;
+
+      if (ent.type === 'LOT') {
+        var anchors = buildingsOfLot(ent.code).map(function (b) { return { b: b, w: worldCenter(b) }; });
+        g[sizeKey] = size;
+        if (axis === 'X') g.posX = r1(newCentre); else g.posZ = r1(newCentre);
+        anchors.forEach(function (a) { setWorldCenter(a.b, a.w.x, a.w.z); });
+        reconcileLot(ent.code);
+        return;
+      }
+      g[sizeKey] = size;
+      setWorldCenter(ent, axis === 'X' ? newCentre : cc.x, axis === 'X' ? cc.z : newCentre);
+      if (ent.type === 'BUILDING') clampBuilding(g, lotGeom(ent.lotCode));
+      else clampToBox(g, unionBox(ent.lotCodes, ms.contract.schema));
+    }
+
+    function onGizmoEnd() {
+      var ent = findEntity(ms.selected), group = ms.groups[ms.selected];
+      if (!ent || !group) return;
+      var before = worldCenter(ent);
+      setWorldCenter(ent, group.position.x, group.position.z);
+      if (ent.type === 'LOT') {
+        // Buildings follow automatically (relative). Basements of this lot move by the same delta.
+        var dx = ent.geom.posX - before.x, dz = ent.geom.posZ - before.z;
+        basementsOfLot(ent.code).forEach(function (b) { b.geom.posX = r1(b.geom.posX + dx); b.geom.posZ = r1(b.geom.posZ + dz); });
+        reconcileLot(ent.code);
+      } else if (ent.type === 'BUILDING') clampBuilding(ent.geom, lotGeom(ent.lotCode));
+      else clampToBox(ent.geom, unionBox(ent.lotCodes, ms.contract.schema));
+      rebuild();
+      commit();
+    }
+
+    // ---------------------------------------------------------------
+    // Persistence, undo, shared floors
+    // ---------------------------------------------------------------
+    function snapshot() {
+      return JSON.stringify({
+        schema: state.modelSchema,
+        floors: (state.mdcBuildings || []).map(function (b) { return [b.name, b.floors]; }),
+        bfloors: (state.mdcBasements || []).map(function (b) { return [b.code, b.floors]; })
+      });
+    }
+    function pushUndo() {
+      ms.undo.push(snapshot());
+      if (ms.undo.length > 50) ms.undo.shift();
+      updateUndoButton();
+    }
+    function updateUndoButton() { var b = $('ms-btn-undo'); if (b) b.disabled = !ms.undo.length; }
+
+    function undo() {
+      if (!ms.undo.length) return;
+      var s = JSON.parse(ms.undo.pop());
+      state.modelSchema = s.schema;
+      s.floors.forEach(function (f, i) { var b = state.mdcBuildings[i]; if (b && b.name === f[0]) b.floors = f[1]; });
+      s.bfloors.forEach(function (f, i) { var b = state.mdcBasements[i]; if (b && b.code === f[0]) b.floors = f[1]; });
+      ms.contract = buildContract();
+      rebuild();
+      commit();
+      updateUndoButton();
+      note('הפעולה בוטלה');
+    }
+
+    // Saves through the app's normal autosave (local + project sheet).
+    function commit() { if (typeof saveLocalState === 'function') saveLocalState(); }
+
+    var noteTimer = null;
+    function note(text) {
+      var el = $('ms-note');
+      el.textContent = text; el.classList.remove('hidden');
+      clearTimeout(noteTimer);
+      noteTimer = setTimeout(function () { el.classList.add('hidden'); }, 2600);
+    }
+
+    function setFloors(ent, value) {
+      var n = parseInt(value, 10);
+      if (!ent.floors.editable) return;
+      if (!(n >= 1 && n <= (ent.type === 'BUILDING' ? 200 : 20))) { note('ערך קומות לא תקין'); renderProps(); return; }
+      pushUndo();
+      if (ent.type === 'BUILDING') state.mdcBuildings[ent.idx].floors = String(n);
+      else state.mdcBasements[ent.idx].floors = String(n);
+      ms.contract = buildContract();
+      rebuild();
+      commit();
+      note('עודכן גם במבנה פיזי (שלב 1)');
+    }
+
+    function setGeom(ent, prop, value) {
+      var v = Number(value);
+      if (!isFinite(v)) { renderProps(); return; }
+      pushUndo();
+      var g = ent.geom;
+      if (ent.type === 'LOT' && (prop === 'width' || prop === 'depth' || prop === 'posX' || prop === 'posZ')) {
+        var anchors = prop === 'width' || prop === 'depth' ? buildingsOfLot(ent.code).map(function (b) { return { b: b, w: worldCenter(b) }; }) : [];
+        var before = { x: g.posX, z: g.posZ };
+        g[prop] = r1(prop === 'width' || prop === 'depth' ? Math.max(MIN_SIZE, v) : v);
+        anchors.forEach(function (a) { setWorldCenter(a.b, a.w.x, a.w.z); });
+        if (prop === 'posX' || prop === 'posZ') {
+          basementsOfLot(ent.code).forEach(function (b) { b.geom.posX = r1(b.geom.posX + g.posX - before.x); b.geom.posZ = r1(b.geom.posZ + g.posZ - before.z); });
+        }
+        reconcileLot(ent.code);
+      } else {
+        g[prop] = r1(Math.max(MIN_SIZE, v));
+        if (ent.type === 'BUILDING') clampBuilding(g, lotGeom(ent.lotCode));
+        else clampToBox(g, unionBox(ent.lotCodes, ms.contract.schema));
+      }
+      rebuild();
+      commit();
+    }
+
+    function setColor(hex) {
+      var ent = findEntity(ms.selected);
+      if (!ent) return;
+      pushUndo();
+      ent.geom.color = hex;
+      rebuild();
+      commit();
+    }
+
+    function fitBasementToLots(ent) {
+      pushUndo();
+      var box = unionBox(ent.lotCodes, ms.contract.schema);
+      ent.geom.posX = r1((box.minX + box.maxX) / 2); ent.geom.posZ = r1((box.minZ + box.maxZ) / 2);
+      ent.geom.width = r1(box.maxX - box.minX); ent.geom.depth = r1(box.maxZ - box.minZ);
+      rebuild();
+      commit();
+    }
+
+    function resetLayout() {
+      if (!confirm('לסדר מחדש את כל המגרשים, המבנים והמרתפים? הגדלים והמיקומים הנוכחיים יוחלפו (ניתן לבטל).')) return;
+      pushUndo();
+      state.modelSchema = { version: 1, lots: {}, buildings: {}, basements: {} };
+      ms.contract = buildContract();
+      rebuild();
+      fitView();
+      commit();
+    }
+
+    // ---------------------------------------------------------------
+    // Panels
+    // ---------------------------------------------------------------
+    function colorDot(hex, size) { return '<span class="rounded-full shrink-0 ' + (size || 'w-2 h-2') + '" style="background:' + esc(hex) + '"></span>'; }
+
+    function renderTree() {
+      var el = $('ms-tree'), c = ms.contract;
+      if (!el || !c) return;
+      var shownBasements = {};
+      var html = c.lots.map(function (lot) {
+        var lk = keyOf('LOT', lot.code), sel = ms.selected === lk;
+        var items = buildingsOfLot(lot.code).map(function (b) {
+          var k = keyOf('BUILDING', b.code);
+          return '<div data-select="' + esc(k) + '" class="p-1.5 rounded-lg text-xs flex justify-between items-center cursor-pointer ' + (ms.selected === k ? 'bg-blue-100 font-bold border border-blue-300' : 'hover:bg-slate-100') + '">' +
+            '<span class="flex items-center gap-2">' + colorDot(b.geom.color) + esc(b.name) + '</span><span class="text-[10px] text-slate-400">' + (b.floors.raw ? esc(b.floors.raw) : '?') + ' קומות</span></div>';
+        }).join('');
+        basementsOfLot(lot.code).forEach(function (bs) {
+          var k = keyOf('BASEMENT', bs.code), first = !shownBasements[bs.code];
+          shownBasements[bs.code] = true;
+          var span = bs.lotCodes.length > 1 ? ' <span class="font-normal text-amber-600">(' + (first ? 'משותף' : 'המשך') + ')</span>' : '';
+          items += '<div data-select="' + esc(k) + '" class="p-1.5 mt-1 rounded-lg text-xs flex justify-between items-center cursor-pointer ' + (ms.selected === k ? 'bg-amber-100 font-bold border border-amber-300' : 'bg-amber-50/60 hover:bg-amber-100/60') + '">' +
+            '<span class="flex items-center gap-2 text-amber-900 font-bold">' + colorDot(bs.geom.color) + esc(bs.name) + span + '</span><span class="text-[10px] text-amber-700 font-bold">' + (bs.floors.raw ? esc(bs.floors.raw) : '?') + ' מפלסים</span></div>';
+        });
+        return '<div class="bg-slate-50/80 p-2 rounded-xl border ' + (sel ? 'border-blue-500 bg-blue-50/50' : 'border-slate-200/70') + ' space-y-1">' +
+          '<div data-select="' + esc(lk) + '" class="flex justify-between items-center font-extrabold text-xs cursor-pointer text-slate-800">' +
+          '<span class="flex items-center gap-2">' + colorDot(lot.geom.color, 'w-2.5 h-2.5') + esc(lot.name) + '</span><span class="text-[10px] font-mono text-slate-400">' + r1(lot.geom.width) + '×' + r1(lot.geom.depth) + 'm</span></div>' +
+          '<div class="space-y-0.5 pt-1 pr-2 border-r border-slate-200">' + (items || '<div class="text-[10px] text-slate-400 p-1">אין מבנים</div>') + '</div></div>';
+      }).join('');
+      if (c.sites.length) {
+        html += '<div class="pt-1"><div class="text-[10px] font-extrabold text-slate-500 mb-1">אתרים (מודלים משותפים)</div>' + c.sites.map(function (s) {
+          return '<div class="flex items-center gap-2 text-xs p-1">' + colorDot(s.color) + '<span class="font-bold">' + esc(s.name) + '</span><span class="text-[10px] text-slate-400">' + esc(s.buildingCodes.join(' + ')) + '</span></div>';
+        }).join('') + '</div>';
+      }
+      if (c.options.length) {
+        html += '<div class="pt-1"><div class="text-[10px] font-extrabold text-purple-600 mb-1">חלופות תכנון</div>' + c.options.map(function (o) {
+          return '<div class="text-xs p-1"><span class="text-purple-700 font-bold">◆ ' + esc(o.title) + '</span> <span class="text-[10px] text-slate-400">← ' + esc(o.targetCode) + '</span></div>';
+        }).join('') + '</div>';
+      }
+      el.innerHTML = html || '<p class="text-xs text-slate-400">אין נתונים.</p>';
+    }
+
+    function numField(label, prop, value) {
+      return '<div><label class="block text-slate-500 mb-1">' + label + '</label><input type="number" step="0.5" data-prop="' + prop + '" value="' + esc(value) + '" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 font-bold text-slate-800"></div>';
+    }
+
+    function renderProps() {
+      var panel = $('ms-props'), ent = findEntity(ms.selected);
+      if (!panel) return;
+      if (!ent) { panel.classList.add('hidden'); return; }
+      panel.classList.remove('hidden');
+      $('ms-props-title').textContent = 'עריכת ' + TYPE_LABEL[ent.type] + ': ' + ent.name;
+      var g = ent.geom, html = '';
+      if (ent.type === 'BUILDING' || ent.type === 'BASEMENT') {
+        var label = ent.type === 'BUILDING' ? 'מספר קומות (משותף עם שלב 1)' : 'מפלסי מרתף (משותף עם שלב 1)';
+        html += ent.floors.editable
+          ? '<div><label class="block text-slate-500 mb-1">' + label + '</label><input type="number" min="1" step="1" data-floors value="' + esc(ent.floors.raw || '') + '" placeholder="?" class="w-full bg-white border border-blue-200 rounded-lg p-1.5 font-bold text-slate-800"></div>'
+          : '<div class="rounded-lg bg-slate-100 p-2 text-[11px] text-slate-600">קומות: <b>' + esc(ent.floors.raw) + '</b> — ערך טקסט; ניתן לעריכה רק בשלב 1 (מבנה פיזי).</div>';
+      }
+      if (ent.type === 'LOT') html += '<div class="grid grid-cols-2 gap-2">' + numField('מיקום X', 'posX', g.posX) + numField('מיקום Z', 'posZ', g.posZ) + '</div>';
+      html += '<div class="grid grid-cols-2 gap-2">' + numField('רוחב (W)', 'width', g.width) + numField('עומק (D)', 'depth', g.depth) + '</div>';
+      if (ent.type === 'BUILDING') {
+        var sites = ms.contract.sites.filter(function (s) { return s.buildingCodes.indexOf(ent.code) >= 0; }).map(function (s) { return s.name; });
+        var opts = ms.contract.options.filter(function (o) { return !o.isGroup && o.targetCode === ent.code; }).length;
+        html += '<div class="text-[11px] text-slate-500 space-y-0.5"><div>מגרש: <b>' + esc(ent.lotCode === NONE_LOT ? 'ללא' : ent.lotCode) + '</b></div>' +
+          (sites.length ? '<div>אתר: <b>' + esc(sites.join(', ')) + '</b></div>' : '') + (opts ? '<div class="text-purple-700">חלופות: <b>' + opts + '</b></div>' : '') + '</div>';
+      }
+      if (ent.type === 'BASEMENT') {
+        html += '<div class="text-[11px] text-slate-500">מגרשים: <b>' + esc(ent.lotCodes.map(function (c) { return c === NONE_LOT ? 'ללא' : c; }).join(', ')) + '</b>' +
+          (ent.buildingCodes.length ? ' • מבנים: <b>' + esc(ent.buildingCodes.join(', ')) + '</b>' : '') + '</div>' +
+          '<button type="button" data-fit-basement class="w-full bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-100 font-bold py-1.5 rounded-lg text-xs">↺ התאמה מלאה לגבולות המגרשים</button>';
+      }
+      if (ent.type === 'LOT') html += '<div class="text-[11px] text-slate-500">שינוי גודל המגרש אינו מזיז את המבנים שעליו.</div>';
+      $('ms-props-content').innerHTML = html;
+    }
+
+    function renderToolbar() {
+      var ent = findEntity(ms.selected), bar = $('ms-toolbar');
+      if (!ent) { bar.classList.add('hidden'); return; }
+      bar.classList.remove('hidden');
+      $('ms-toolbar-title').textContent = ent.name;
+      $('ms-toolbar-sub').textContent = TYPE_LABEL[ent.type];
+      $('ms-toolbar-dot').style.backgroundColor = ent.geom.color;
+      $('ms-color-current').style.backgroundColor = ent.geom.color;
+      var on = 'px-3 py-1.5 rounded-xl bg-white text-blue-600 shadow-sm', off = 'px-3 py-1.5 rounded-xl text-slate-600 hover:text-slate-900';
+      $('ms-mode-pushpull').className = ms.mode === 'pushpull' ? on : off;
+      $('ms-mode-move').className = ms.mode === 'move' ? on : off;
+    }
+
+    function setMode(mode) { ms.mode = mode; if (ms.selected) attachSelection(); renderToolbar(); }
+
+    function wireUi() {
+      if (wireUi.done) return;
+      wireUi.done = true;
+      $('ms-palette').innerHTML = PALETTE.map(function (p) {
+        return '<button type="button" data-color="' + p.hex + '" title="' + p.name + '" class="w-5 h-5 rounded-md border border-white shadow-sm hover:scale-110 hover:ring-2 hover:ring-blue-400 transition" style="background:' + p.hex + '"></button>';
+      }).join('');
+      $('ms-palette').addEventListener('click', function (e) { var b = e.target.closest('[data-color]'); if (b) { setColor(b.getAttribute('data-color')); $('ms-palette').classList.add('hidden'); } });
+      $('ms-color-btn').addEventListener('click', function (e) { e.stopPropagation(); $('ms-palette').classList.toggle('hidden'); });
+      document.addEventListener('click', function (e) { var pal = $('ms-palette'); if (pal && !pal.classList.contains('hidden') && !e.target.closest('#ms-palette') && !e.target.closest('#ms-color-btn')) pal.classList.add('hidden'); });
+      $('ms-mode-pushpull').addEventListener('click', function () { setMode('pushpull'); });
+      $('ms-mode-move').addEventListener('click', function () { setMode('move'); });
+      $('ms-btn-deselect').addEventListener('click', deselect);
+      $('ms-btn-undo').addEventListener('click', undo);
+      $('ms-btn-fit').addEventListener('click', fitView);
+      $('ms-btn-reset').addEventListener('click', resetLayout);
+      $('ms-btn-png').addEventListener('click', exportPng);
+      $('ms-zoom-in').addEventListener('click', function () { zoom(0.8); });
+      $('ms-zoom-out').addEventListener('click', function () { zoom(1.25); });
+      $('ms-toggle-options').addEventListener('change', function () { ms.showOptions = this.checked; rebuild(); });
+      $('ms-toggle-xray').addEventListener('change', function () { ms.xrayAll = this.checked; ms.lastOcc = 0; });
+      $('ms-explode').addEventListener('input', function () {
+        ms.explode = Number(this.value) / 100;
+        $('ms-explode-text').textContent = this.value + '%';
+        if (ms.selected && ms.mode === 'pushpull') createArrows(findEntity(ms.selected));
+      });
+      $('ms-tree').addEventListener('click', function (e) { var t = e.target.closest('[data-select]'); if (t) select(t.getAttribute('data-select')); });
+      $('ms-props-content').addEventListener('change', function (e) {
+        var ent = findEntity(ms.selected);
+        if (!ent) return;
+        if (e.target.hasAttribute('data-floors')) setFloors(ent, e.target.value);
+        else if (e.target.getAttribute('data-prop')) setGeom(ent, e.target.getAttribute('data-prop'), e.target.value);
+      });
+      $('ms-props-content').addEventListener('click', function (e) {
+        if (e.target.closest('[data-fit-basement]')) { var ent = findEntity(ms.selected); if (ent) fitBasementToLots(ent); }
+      });
+      document.addEventListener('keydown', function (e) {
+        if (!isVisible()) return;
+        var typing = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '');
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !typing) { e.preventDefault(); undo(); }
+        else if (e.key === 'Escape' && !typing && ms.selected) deselect();
+      });
+    }
+
+    function renderHeader() {
+      var c = ms.contract, p = state.selectedProject || {};
+      $('ms-project-name').textContent = p.name ? '• ' + p.name : '';
+      $('ms-subtitle').textContent = c.lots.filter(function (l) { return l.code !== NONE_LOT; }).length + ' מגרשים • ' + c.buildings.length + ' מבנים • ' +
+        c.basements.length + ' מרתפים • ' + c.sites.length + ' אתרים • ' + c.options.length + ' חלופות';
+    }
+
+    // ---------------------------------------------------------------
+    // Entry point: called by renderMdcStep(5)
+    // ---------------------------------------------------------------
+    window.renderModelSchemaStep = function () {
+      wireUi();
+      updateUndoButton();
+      var hasContent = (state.mdcBuildings || []).some(function (b) { return b && String(b.name || '').trim(); }) ||
+        (state.mdcBasements || []).some(function (b) { return b && String(b.code || '').trim(); }) ||
+        (state.mdcLots || []).some(function (l) { return l && String(l.number || '').trim(); });
+      if (!hasContent) { setOverlay('יש להגדיר מגרשים, מבנים או מרתפים בשלב 1 (מבנה פיזי) כדי לבנות את הסכמה.', false); return; }
+      if (ms.failed) { setOverlay('טעינת מנוע התלת-ממד נכשלה. בדוק חיבור לאינטרנט ורענן את הדף.', false); return; }
+      if (!ms.ready) setOverlay('טוען מנוע תלת-ממד...', true);
+      loadThree().then(function () {
+        if (!ms.ready) init3D();
+        var projectNo = state.selectedProject ? String(state.selectedProject.no) : '';
+        var projectChanged = projectNo !== ms.projectNo;
+        if (projectChanged) { ms.projectNo = projectNo; ms.selected = null; ms.undo = []; updateUndoButton(); }
+        ms.contract = buildContract();
+        setOverlay('');
+        renderHeader();
+        resize();
+        rebuild();
+        if (projectChanged) fitView();
+      }).catch(function (err) {
+        ms.failed = true;
+        setOverlay('טעינת מנוע התלת-ממד נכשלה: ' + (err && err.message || err), false);
+      });
+    };
+  })();
+</script>

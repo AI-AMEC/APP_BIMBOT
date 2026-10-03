@@ -1,0 +1,65 @@
+<div id="view-documents" class="hidden max-w-[1600px] mx-auto p-4 md:p-6 space-y-6 block">
+    <div id="docs-content" class="space-y-4">
+        <div class="border-b border-slate-100 pb-3 flex flex-wrap justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-slate-200 gap-4">
+            <div>
+                <h2 class="text-xl font-bold text-slate-900 tracking-tight">BIM COMMANDER</h2>
+                <p class="text-xs text-slate-500 font-mono mt-0.5">מערכת ליצירת מסמכים</p>
+            </div>
+            
+            <div class="flex-1 max-w-sm relative" id="bdg-project-select-container">
+                <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">פרויקט יעד</label>
+                <div class="relative">
+                    <input type="hidden" id="bdg-target-project">
+                    <input type="text" id="bdg-project-search-input" placeholder="חיפוש ובחירת פרויקט..." class="w-full text-sm border border-slate-200 rounded-lg py-2 px-3 bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none transition text-slate-800 font-semibold cursor-text" autocomplete="off" onfocus="toggleBdgDropdown(true)" onkeyup="filterBdgDropdown()">
+                    <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                        <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </div>
+                </div>
+                
+                <div id="bdg-project-dropdown-list" class="hidden absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto">
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <p class="text-xs text-slate-400 mb-4">העתקת תיקיות תבנית פרויקט אחידות ישירות לתיקיות Google Drive ייעודיות</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-12 gap-4">
+                <div class="md:col-span-4 bg-slate-50 rounded-xl p-3 border border-slate-200 space-y-2">
+                    <span class="text-xs text-slate-500 font-bold block uppercase">בחירת שלב ותהליך</span>
+                    <div class="space-y-1" id="bdg-process-list">
+                        <p id="process-list-loading" class="text-xs text-slate-400 italic">טוען תהליכים...</p>
+                    </div>
+                </div>
+                
+                <div class="md:col-span-8 space-y-3">
+                    <div class="border border-slate-200 rounded-xl overflow-visible text-xs bg-white">
+                        <table class="w-full text-left">
+                            <thead class="bg-slate-50 border-b border-slate-200 text-slate-700 font-semibold">
+                                <tr>
+                                    <th class="p-2 w-10"><input type="checkbox" id="bdg-select-all" checked onchange="toggleAllBdgFiles(this.checked)" class="rounded w-4 h-4 text-blue-600 cursor-pointer"></th>
+                                    <th class="p-2">שם קובץ יעד</th>
+                                    <th class="p-2 w-34">
+                                        <select id="filter-doc-type" onchange="filterBdgFilesByDocType()" class="bg-slate-50 border border-slate-300 rounded font-semibold text-slate-700 text-xs p-1 outline-none cursor-pointer focus:ring-1 focus:ring-blue-500 max-w-full">
+                                            <option value="All">סוג מסמך</option>
+                                        </select>
+                                    </th>
+                                    <th class="p-2">מזהה קובץ מקור</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tbl-bdg-files" class="divide-y divide-slate-100">
+                                <tr><td colspan="4" class="p-6 text-center text-slate-400 font-medium">יש לבחור שלב תהליך מהרשימה משמאל.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="text-right mt-4">
+                        <button type="button" onclick="triggerBdgConfirmation()" id="btn-bdg-generate-trigger" disabled class="bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200 text-xs font-bold px-4 py-2 rounded-lg transition shadow-sm">📁 יצירת מסמכים</button>
+                    </div>
+                    
+                    <div id="bdg-success-links" class="hidden mt-3 text-left p-4 bg-emerald-50 border border-emerald-200 rounded-xl"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

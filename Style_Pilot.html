@@ -1,0 +1,106 @@
+<style>
+  :root {
+    color-scheme: light;
+    --pilot-ink: #1e293b;
+    --pilot-muted: #64748b;
+    --pilot-line: #e6ebef;
+    --pilot-canvas: #f7f9fa;
+    --pilot-teal: #087e83;
+    --pilot-blue: #2866c5;
+  }
+
+  html, body, button, input, select, textarea {
+    font-family: 'Assistant', Arial, sans-serif !important;
+  }
+  body { color: var(--pilot-ink); background: var(--pilot-canvas); font-size: 15px; }
+  #main-sidebar { width: 258px; background: #fff; border-color: var(--pilot-line); box-shadow: -1px 0 8px rgba(15, 23, 42, .025); }
+  #main-sidebar > div:first-child > div:first-child { min-height: 72px; }
+  #main-sidebar nav { padding: 16px 12px; }
+  #main-sidebar nav button { min-height: 42px; border-radius: 9px; }
+  #app-container > header { height: 64px; padding-inline: 26px; background: rgba(255,255,255,.96); border-color: var(--pilot-line); box-shadow: 0 1px 3px rgba(15, 23, 42, .025); }
+  #app-container > div { background: var(--pilot-canvas); }
+  #btn-login { min-height: 40px; border-color: #dce4e9; border-radius: 9px; box-shadow: none; }
+
+  .pilot-dashboard { padding: 30px clamp(18px, 3vw, 44px) 40px !important; max-width: 1680px !important; }
+  .pilot-dashboard-heading { padding-bottom: 20px; border-color: var(--pilot-line); }
+  .pilot-dashboard-heading h2 { margin-top: 2px; font-size: 29px; line-height: 1.15; letter-spacing: -.02em; }
+  .pilot-eyebrow { color: #68808b; font-size: 11px; font-weight: 700; letter-spacing: .11em; text-transform: uppercase; }
+  .pilot-stats { margin-top: 2px; }
+  .pilot-stat { display: flex; align-items: center; justify-content: space-between; min-height: 68px; padding: 13px 17px; border: 1px solid var(--pilot-line); border-radius: 11px; background: #fff; box-shadow: 0 2px 6px rgba(15, 23, 42, .025); }
+  .pilot-stat > span:last-child { font-size: 23px; line-height: 1; }
+  .pilot-stat-label { color: var(--pilot-muted); font-size: 14px; font-weight: 600; }
+  #source-warnings { border-radius: 10px; }
+  #view-dashboard > .bg-white { border-color: var(--pilot-line); border-radius: 11px; box-shadow: 0 2px 7px rgba(15, 23, 42, .025); }
+  #view-dashboard input, #view-dashboard select, #modal-add-contact input { min-height: 39px; border-color: #dce4e9; border-radius: 8px; background-color: #fff; color: var(--pilot-ink); font-size: 14px; }
+  #view-dashboard input:focus, #view-dashboard select:focus, #modal-add-contact input:focus { border-color: #62a6ac; outline: none; box-shadow: 0 0 0 3px rgba(8, 126, 131, .10); }
+  #btn-sync-data { min-height: 40px; border-radius: 8px; background: var(--pilot-teal); box-shadow: none; }
+  #btn-sync-data:hover { background: #066c71; }
+  #view-dashboard > .bg-white.border.rounded-xl.overflow-hidden { margin-top: 0; }
+  #view-dashboard table { font-size: 14px; direction: rtl; text-align: right; }
+  #view-dashboard thead tr { background: #f4f7f8; color: #536875; font-size: 11px; letter-spacing: .055em; }
+  #view-dashboard th { padding: 13px 14px; }
+  #dashboard-project-list td { padding: 12px 14px; color: #405361; }
+  #dashboard-project-list tr:hover { background: #f8fbfb; }
+  #view-dashboard[dir="rtl"] .relative > span { right: 0; left: auto; padding-right: .75rem; padding-left: 0; }
+  #view-dashboard[dir="rtl"] #project-search { padding-right: 2.25rem; padding-left: .75rem; }
+
+  .bg-slate-900 { background-color: #176f75 !important; }
+  .bg-blue-600 { background-color: var(--pilot-blue); }
+  .hover\:bg-blue-700:hover { background-color: #2057a7; }
+  #toast-container > div { font-family: 'Assistant', Arial, sans-serif !important; }
+  input, select, textarea { accent-color: var(--pilot-teal); }
+  :focus-visible { outline: 3px solid rgba(8, 126, 131, .28); outline-offset: 2px; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: #f0f3f4; }
+  ::-webkit-scrollbar-thumb { background: #c6d2d6; border: 2px solid #f0f3f4; border-radius: 8px; }
+  ::-webkit-scrollbar-thumb:hover { background: #a7b8be; }
+
+  @media (max-width: 760px) {
+    #main-sidebar { width: 68px; min-width: 68px; }
+    #main-sidebar > div:first-child > div:first-child { justify-content: center; padding-inline: 6px; }
+    /* Compact sidebar: only the home icon remains in the logo row */
+    #main-sidebar .bimbot-logo-text,
+    #main-sidebar nav button span, #main-sidebar nav button svg + span { display: none; }
+    #main-sidebar nav button { justify-content: center; padding-inline: 0; }
+    #app-container > header { padding-inline: 14px; }
+    .pilot-dashboard { padding: 22px 14px 30px !important; }
+  }
+  #view-project-details > nav { direction:rtl; }
+  #home-phase-timeline { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;position:relative;padding:12px 0; }
+  .home-phase-node { position:relative;isolation:isolate;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;padding:12px 14px;background:transparent;border:0;border-radius:12px;min-width:0; }
+  .home-phase-node::before { content:'';position:absolute;top:33px;left:0;right:0;height:3px;background:#dce5eb;z-index:-1; }
+  .home-phase-node:first-child::before { right:50%; }
+  .home-phase-node:last-child::before { left:50%; }
+  .home-phase-dot { display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:50%;background:#fff;border:2px solid #ccd9e2;color:#657c8b;font-size:18px;font-weight:800;box-shadow:0 0 0 7px #f8fafc;flex-shrink:0; }
+  .home-phase-node[data-current="true"] .home-phase-dot { background:#2866c5;border-color:#2866c5;color:white;box-shadow:0 0 0 7px #e5eefc; }
+  .home-phase-node[data-complete="true"] .home-phase-dot { background:#087e83;border-color:#087e83;color:white; }
+  .home-phase-node[aria-selected="true"] { background:rgba(226,236,247,.35); }
+  .home-phase-node:hover { background:rgba(226,236,247,.55); }
+
+  #mdc-relationship-summary { direction:rtl;text-align:right; }
+  @media(max-width:640px){ .home-phase-node{padding:12px 5px;font-size:12px;gap:7px}.home-phase-dot{width:36px;height:36px}.home-phase-node::before{top:29px} }
+
+  #home-phase-timeline { padding:4px 0 0; }
+  .home-phase-node { padding:5px 8px;gap:0; }
+  .home-phase-node::before { top:19px;height:2px; }
+  .home-phase-dot { width:28px;height:28px;font-size:13px;box-shadow:0 0 0 4px #fff;margin-bottom:3px; }
+  .home-phase-node[data-current="true"] .home-phase-dot { box-shadow:0 0 0 4px #e5eefc; }
+  .home-phase-node > div:last-child { margin-top:2px;font-size:10px; }
+  .home-phase-node > div:first-child > span:nth-child(2) { font-size:13px; }
+  .home-phase-node > div:first-child > span:last-child { padding:1px 6px; }
+  #home-workflow-table { font-size:13px;min-width:850px;border-collapse:collapse; }
+  #home-workflow-table th, #home-workflow-table td { padding:9px 10px;border-bottom:1px solid #e9eef3;vertical-align:middle; }
+  #home-workflow-table thead { background:#f4f7fa;color:#53677b;font-size:12px; }
+  #home-workflow-table tbody th[scope="row"] { font-weight:600;max-width:235px; }
+  #home-workflow-table .workflow-phase-cell { width:138px;background:#f6f8fb;border-inline-end:1px solid #e2e8f0;vertical-align:top;padding-top:14px; }
+  .workflow-phase-cell div { margin-top:6px;font-size:12px;color:#60758a;font-weight:400; }
+  #home-workflow-table select { width:155px;max-width:100%;border:0;border-radius:6px;padding:5px 7px;background:#eef2f6;color:#475569;font:inherit; }
+  #home-workflow-table select[data-status="DONE"] { background:#e4f5ed;color:#126846; }
+  #home-workflow-table select[data-status="IN_PROGRESS"] { background:#e8f0ff;color:#245aaf; }
+  #home-workflow-table select[data-status="BLOCKED"] { background:#fde8e8;color:#a43232; }
+  #home-workflow-table input { width:100%;min-width:130px;border:1px solid transparent;border-radius:5px;padding:5px;background:transparent;font:inherit; }
+  #home-workflow-table input:hover, #home-workflow-table input:focus { border-color:#cbd5e1;background:#fff; }
+  #home-workflow-table .workflow-audit { white-space:nowrap;color:#718096;font-size:11px; }
+  #home-workflow-table button { color:#2866c5;font-weight:700;font-size:12px;white-space:nowrap; }
+  #home-workflow-table tr[data-highlight="true"] td, #home-workflow-table tr[data-highlight="true"] th[scope="row"] { background:#f8fbff; }
+</style>

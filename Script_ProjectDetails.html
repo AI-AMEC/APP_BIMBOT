@@ -1,0 +1,1450 @@
+<script>
+    // ==========================================
+    // Read-only cloud panel HTML is cached by project and view only in memory.
+    var projectCloudPanelCache = Object.create(null);
+    var projectCloudPanelPending = Object.create(null);
+    var cloudConnectionGeneration = 0;
+    window.addEventListener('bimbot:cloud-connection-changed', function() {
+        projectCloudPanelCache = Object.create(null);
+        projectCloudPanelPending = Object.create(null);
+        pilotSnapshotCache = Object.create(null);
+        pilotSnapshotPending = Object.create(null);
+    });
+
+    function cloudPanelKey(projectNo, view) { return String(projectNo) + ':' + String(view); }
+    function showCloudPanelResult(projectNo, view, result) {
+        var frame = document.getElementById('cloud-' + view + '-frame');
+        var message = document.getElementById('cloud-' + view + '-message');
+        if (!frame || !message) return;
+        frame.classList.add('hidden');
+        message.classList.remove('hidden');
+        if (!result || result.available !== true || typeof result.html !== 'string' || !result.html.trim()) {
+            message.textContent = (result && (result.error || result.message)) || 'נתוני הענן עדיין אינם זמינים לפרויקט הזה.';
+            return;
+        }
+        var renderKey = cloudPanelKey(projectNo, view);
+        var rendered = frame.__bimbotCloudRender;
+        if (!rendered || rendered.key !== renderKey || rendered.html !== result.html) {
+            frame.srcdoc = result.html;
+            frame.__bimbotCloudRender = { key: renderKey, html: result.html };
+        }
+        message.classList.add('hidden');
+        frame.classList.remove('hidden');
+    }
+    function loadCloudPanel(view, forceReload) {
+        var projectNo = state.selectedProject && state.selectedProject.no;
+        if (!projectNo) return;
+        var key = cloudPanelKey(projectNo, view);
+        if (forceReload) delete projectCloudPanelCache[key];
+        if (projectCloudPanelCache[key]) {
+            showCloudPanelResult(projectNo, view, projectCloudPanelCache[key]);
+            return;
+        }
+        if (projectCloudPanelPending[key]) return;
+        var frame = document.getElementById('cloud-' + view + '-frame');
+        var message = document.getElementById('cloud-' + view + '-message');
+        if (frame) frame.classList.add('hidden');
+        if (message) { message.classList.remove('hidden'); message.textContent = 'טוען צילום מצב של הפרויקט מהענן…'; }
+        projectCloudPanelPending[key] = true;
+        var requestGeneration = cloudConnectionGeneration;
+        google.script.run.withSuccessHandler(function(result) {
+            delete projectCloudPanelPending[key];
+            if (requestGeneration !== cloudConnectionGeneration) return;
+            projectCloudPanelCache[key] = result || { available: false };
+            if (!state.selectedProject || String(state.selectedProject.no) !== String(projectNo)) return;
+            showCloudPanelResult(projectNo, view, projectCloudPanelCache[key]);
+        }).withFailureHandler(function(err) {
+            delete projectCloudPanelPending[key];
+            if (requestGeneration !== cloudConnectionGeneration) return;
+            if (!state.selectedProject || String(state.selectedProject.no) !== String(projectNo)) return;
+            if (frame) frame.classList.add('hidden');
+            if (message) { message.classList.remove('hidden'); message.textContent = 'לא ניתן לטעון את צילום מצב הענן. ' + (err && err.message ? err.message : 'נסו לרענן את התצוגה.'); }
+        }).getCloudPanel(projectNo, view);
+    }
+    function refreshCloudPanel(view) { loadCloudPanel(view, true); }
+
+    window.addEventListener('message', function(event) {
+        var knownFrames = ['issues'].map(function(view) { return document.getElementById('cloud-' + view + '-frame'); }).filter(Boolean);
+        if (!knownFrames.some(function(frame) { return event.source === frame.contentWindow; })) return;
+        var message = event.data;
+        if (!message || message.type !== 'bimbot-cloud-navigate') return;
+        if (message.page === 'models') {
+            state.mdcCurrentStep = 4;
+            switchTab('mdc');
+            renderMdcStep(4);
+        } else if (message.page === 'docs') {
+            switchTab('kickoff');
+        } else if (message.page === 'acc') {
+            switchTab('home');
+        }
+    });
+
+    var pilotSnapshotCache = Object.create(null);
+    var pilotSnapshotPending = Object.create(null);
+    var projectWorkflowDraft = { revision: null, stage: 'UNSET', tasks: [], writable: false, loading: false };
+    var workflowTaskDrafts = Object.create(null);
+    var workflowDirty = false;
+    var workflowMessage = '';
+    var workflowSaving = false;
+    var workflowNextActionTab = '';
+    var workflowNextActionTaskId = '';
+    var workflowSavedStage = 'UNSET';
+    var workflowStageDirty = false;
+    var homeBrowseStage = 'INITIAL';
+    var workflowStageObjectives = { INITIAL: 'הקמת בסיס הפרויקט, התנעת אדריכלות ויועצים, ובדיקת מוכנות ראשונית.', FINAL: 'הכנת ובדיקת מסירת התכנון לשלב מכרז; סבב הבקרה נשמר כתהליך ייעודי בעתיד.', DETAILED: 'בדיקת התכנון המפורט וסיכום הנחיות BIM לביצוע.' };
+    var workflowActionTabs = { architect_meeting: 'architecture-kickoff', decomposition: 'mdc', cde_urs: 'bim-info', consultant_kickoff: 'consultant-kickoff' };
+    var workflowActionLabels = { architect_meeting: 'פתיחת פגישת התנעה אדריכלית', decomposition: 'פתיחת מבנה הפרויקט והמודלים', cde_urs: 'פתיחת פרטי פרויקט', consultant_kickoff: 'פתיחת התנעת יועצים' };
+    var workflowTaskDefinitions = {
+        INITIAL: [
+            ['architect_meeting', 'פגישת טרום התנעה עם האדריכלים'], ['decomposition', 'הקמת סכמת פירוק ורישום מודלים'],
+            ['cde_urs', 'אימות CDE ו־URS'], ['architect_check', 'בדיקת מודל האדריכלות'], ['bep', 'אימות מסמך BEP'],
+            ['consultant_kickoff', 'התנעת יועצים'], ['first_review', 'בקרה ראשונה ומעקב תיקונים']
+        ],
+        FINAL: [['tender_review', 'בקרה למכרז, דוח ומעקב תיקונים']],
+        DETAILED: [['detailed_review', 'בדיקת תכנון מפורט'], ['stage_summary', 'סיכום שלב והנחיות BIM לביצוע']]
+    };
+    var workflowStageLabels = { UNSET: 'לא אומת · לא ידוע', INITIAL: 'תכנון ראשוני', FINAL: 'תכנון סופי / מכרז', DETAILED: 'תכנון מפורט' };
+    var workflowStatusLabels = { NOT_STARTED: 'טרם התחיל', IN_PROGRESS: 'בעבודה', BLOCKED: 'חסום', DONE: 'הושלם בהחלטת מנהל' };
+
+    function workflowTasksForStage(stage) {
+        var existing = workflowTaskDrafts[stage] || Object.create(null);
+        return (workflowTaskDefinitions[stage] || []).map(function(def) {
+            var prior = existing[def[0]] || {};
+            return { id: def[0], label: prior.label || def[1], stage: stage, status: prior.status || 'NOT_STARTED', note: prior.note || '', updatedAt: prior.updatedAt || '', updatedBy: prior.updatedBy || '' };
+        });
+    }
+    function renderProjectWorkflow() {
+        var stageSelect = document.getElementById('home-stage-select');
+        var list = document.getElementById('home-task-list');
+        var message = document.getElementById('home-workflow-message');
+        var meta = document.getElementById('home-workflow-meta');
+        var saveButton = document.getElementById('home-workflow-save');
+        if (!list) return;
+        if (stageSelect) { stageSelect.value = projectWorkflowDraft.stage || 'UNSET'; stageSelect.disabled = !projectWorkflowDraft.writable || projectWorkflowDraft.loading || workflowSaving; }
+        list.textContent = '';
+        if (projectWorkflowDraft.loading) {
+            if (saveButton) saveButton.disabled = true;
+            if (message) message.textContent = 'טוען החלטות מנהל שמורות…';
+            return;
+        }
+        if (workflowMessage) {
+            if (message) message.textContent = workflowMessage;
+        } else if (projectWorkflowDraft.stage === 'UNSET') {
+            if (message) message.textContent = 'לא נשמר שלב לפרויקט. בחרו שלב לאחר אימות עם מנהל הפרויקט.';
+        } else if (message) {
+            message.textContent = 'המשימות מציגות תהליך עבודה מוצע. עדכון מצב או סגירה דורשים החלטה מפורשת.';
+        }
+        if (!workflowStageLabels[homeBrowseStage]) homeBrowseStage = projectWorkflowDraft.stage !== 'UNSET' ? projectWorkflowDraft.stage : 'INITIAL';
+        projectWorkflowDraft.tasks = ['INITIAL','FINAL','DETAILED'].reduce(function(all, stage) { return all.concat(workflowTasksForStage(stage)); }, []);
+        renderWorkflowNextAction();
+        renderHomeTimeline();
+        ['INITIAL','FINAL','DETAILED'].forEach(function(stage) {
+            var tasks = workflowTasksForStage(stage);
+            tasks.forEach(function(task, index) {
+                var row = document.createElement('tr'); row.dataset.phase = stage; row.dataset.taskId = task.id; row.dataset.highlight = homeBrowseStage === stage ? 'true' : 'false';
+                if (index === 0) {
+                    var phase = document.createElement('th'); phase.scope = 'rowgroup'; phase.rowSpan = tasks.length; phase.className = 'workflow-phase-cell';
+                    var title = document.createElement('strong'); title.textContent = workflowStageLabels[stage]; phase.appendChild(title);
+                    var completion = document.createElement('div'); completion.id = 'workflow-progress-' + stage; phase.appendChild(completion);
+                    row.appendChild(phase);
+                }
+                var name = document.createElement('th'); name.scope = 'row'; name.textContent = task.label; row.appendChild(name);
+                var statusCell = document.createElement('td');
+                var select = document.createElement('select'); select.setAttribute('aria-label','מצב: ' + task.label);
+                Object.keys(workflowStatusLabels).forEach(function(status) { var option = document.createElement('option'); option.value = status; option.textContent = workflowStatusLabels[status]; select.appendChild(option); });
+                select.value = task.status; select.dataset.status = task.status; select.disabled = !projectWorkflowDraft.writable || workflowSaving;
+                select.addEventListener('change', function() { task.status = select.value; select.dataset.status = task.status; rememberWorkflowTask(task); updateWorkflowTableProgress(); });
+                statusCell.appendChild(select); row.appendChild(statusCell);
+                var evidenceCell = document.createElement('td');
+                var note = document.createElement('input'); note.type = 'text'; note.maxLength = 2000; note.value = task.note; note.placeholder = 'הערה / קישור לראיה'; note.title = task.note || 'טרם נרשמה ראיה'; note.setAttribute('aria-label','ראיה: ' + task.label); note.disabled = !projectWorkflowDraft.writable || workflowSaving;
+                note.addEventListener('input', function() { task.note = note.value; note.title = note.value; rememberWorkflowTask(task); }); evidenceCell.appendChild(note); row.appendChild(evidenceCell);
+                var audit = document.createElement('td'); audit.className = 'workflow-audit'; var date = task.updatedAt ? new Date(task.updatedAt) : null;
+                audit.textContent = date && !isNaN(date.getTime()) ? new Intl.DateTimeFormat('he-IL',{dateStyle:'short'}).format(date) : 'טרם עודכן';
+                audit.title = task.updatedBy ? task.updatedBy + ' · ' + task.updatedAt : 'אין החלטה מתועדת'; row.appendChild(audit);
+                var action = document.createElement('td');
+                if (workflowActionTabs[task.id]) { var button = document.createElement('button'); button.type = 'button'; button.textContent = 'פתיחה'; button.setAttribute('aria-label', workflowActionLabels[task.id]); button.addEventListener('click', function() { openWorkflowTaskAction(task.id); }); action.appendChild(button); }
+                else { var existing = document.createElement('span'); existing.className = 'text-xs text-slate-400'; existing.textContent = 'מעקב בטבלה'; action.appendChild(existing); }
+                row.appendChild(action); list.appendChild(row);
+            });
+        });
+        updateWorkflowTableProgress();
+        if (meta) meta.textContent = projectWorkflowDraft.writable ? ((workflowDirty ? 'יש שינויים שלא נשמרו · ' : '') + (projectWorkflowDraft.revision != null ? 'גרסה ' + projectWorkflowDraft.revision : 'טרם נשמר')) : 'מצב קריאה בלבד';
+        var dirtyNotice = document.getElementById('home-decisions-dirty');
+        if (dirtyNotice) dirtyNotice.classList.toggle('hidden', !workflowDirty);
+        if (saveButton) { saveButton.disabled = !projectWorkflowDraft.writable || projectWorkflowDraft.loading || workflowSaving; saveButton.textContent = workflowSaving ? 'שומר…' : 'שמירת החלטות'; }
+    }
+    function updateWorkflowTableProgress() {
+        ['INITIAL','FINAL','DETAILED'].forEach(function(stage) {
+            var tasks = workflowTasksForStage(stage), done = tasks.filter(function(t) { return t.status === 'DONE'; }).length;
+            var cell = document.getElementById('workflow-progress-' + stage);
+            if (cell) cell.textContent = done + ' / ' + tasks.length + ' הושלמו';
+        });
+    }
+    function renderHomeTimeline() {
+        var host = document.getElementById('home-phase-timeline');
+        var phaseStatus = document.getElementById('home-phase-status');
+        if (!host) return;
+        host.textContent = '';
+        var savedStage = workflowSavedStage || 'UNSET';
+        var pending = workflowStageDirty && projectWorkflowDraft.stage !== savedStage;
+        if (phaseStatus) phaseStatus.textContent = savedStage === 'UNSET' ? (pending ? 'השלב לא אומת · בחירה ממתינה לשמירה' : 'השלב הנוכחי לא אומת') : 'השלב הנוכחי: ' + workflowStageLabels[savedStage] + (pending ? ' · שינוי ממתין לשמירה: ' + workflowStageLabels[projectWorkflowDraft.stage] : '');
+        ['INITIAL', 'FINAL', 'DETAILED'].forEach(function(stage) {
+            var tasks = workflowTasksForStage(stage);
+            var done = tasks.length > 0 && tasks.every(function(task) { return task.status === 'DONE'; });
+            var current = savedStage === stage;
+            var card = document.createElement('button'); card.type = 'button'; card.setAttribute('role', 'tab'); card.setAttribute('aria-selected', homeBrowseStage === stage ? 'true' : 'false');
+            card.className = 'home-phase-node relative flex flex-col items-center text-center transition';
+            card.dataset.current = current ? 'true' : 'false'; card.dataset.complete = done ? 'true' : 'false';
+            card.addEventListener('click', function() { homeBrowseStage = stage; renderProjectWorkflow(); });
+            var badge = document.createElement('div'); badge.className = 'flex flex-col items-center';
+            var dot = document.createElement('span'); dot.className = 'home-phase-dot mb-3 flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-sm font-bold text-slate-700'; dot.textContent = done ? '✓' : String(['INITIAL','FINAL','DETAILED'].indexOf(stage) + 1); badge.appendChild(dot);
+            var name = document.createElement('span'); name.className = 'text-sm font-bold text-slate-900'; name.textContent = workflowStageLabels[stage]; badge.appendChild(name);
+            var state = document.createElement('span'); state.className = 'rounded-full px-2 py-1 text-[10px] font-bold ' + (done ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'); state.textContent = done ? 'כל המשימות הושלמו' : tasks.length ? tasks.filter(function(t) { return t.status === 'DONE'; }).length + ' מתוך ' + tasks.length + ' משימות' : 'אין משימות מוגדרות'; badge.appendChild(state); card.appendChild(badge);
+            var hint = document.createElement('div'); hint.className = 'mt-2 text-xs text-slate-500'; hint.textContent = current ? 'השלב שנקבע' : (stage === homeBrowseStage ? 'מודגש בטבלה' : 'הדגשה בטבלה'); card.appendChild(hint);
+            host.appendChild(card);
+        });
+    }
+    function renderWorkflowNextAction() {
+        var label = document.getElementById('home-next-action');
+        var button = document.getElementById('home-next-action-button');
+        var tasks = workflowTasksForStage(workflowSavedStage || 'UNSET');
+        workflowNextActionTab = '';
+        workflowNextActionTaskId = '';
+        var task = tasks.find(function(item) { return item.status === 'BLOCKED'; }) || tasks.find(function(item) { return item.status === 'IN_PROGRESS'; }) || tasks.find(function(item) { return item.status === 'NOT_STARTED'; });
+        if (!task) {
+            if (label) label.textContent = workflowSavedStage === 'UNSET' ? 'יש לאמת שלב עבודה' : 'כל משימות השלב שנקבע סומנו כהושלמו';
+            if (button) button.classList.add('hidden');
+            return;
+        }
+        workflowNextActionTab = workflowActionTabs[task.id] || '';
+        workflowNextActionTaskId = task.id;
+        var stateLabel = task.status === 'BLOCKED' ? 'חסום' : task.status === 'IN_PROGRESS' ? 'בעבודה' : 'טרם התחיל';
+        if (label) label.textContent = 'מוצע בשלב שנקבע · ' + stateLabel + ': ' + task.label;
+        if (button) { button.textContent = workflowActionLabels[task.id] || ''; button.classList.toggle('hidden', !workflowNextActionTab); }
+    }
+    function openWorkflowTaskAction(taskId) {
+        var tab = workflowActionTabs[taskId];
+        if (!tab) return;
+        if (tab === 'mdc') { state.mdcCurrentStep = 1; switchTab(tab); renderMdcStep(1); }
+        else switchTab(tab);
+    }
+    function openWorkflowNextAction() {
+        var task = (projectWorkflowDraft.tasks || []).find(function(item) { return item.id === workflowNextActionTaskId; });
+        if (task) openWorkflowTaskAction(task.id);
+    }
+    function rememberWorkflowTask(task) {
+        if (!workflowTaskDrafts[task.stage]) workflowTaskDrafts[task.stage] = Object.create(null);
+        workflowTaskDrafts[task.stage][task.id] = task;
+        workflowDirty = true;
+        workflowMessage = '';
+        renderWorkflowNextAction();
+        renderHomeTimeline();
+        var meta = document.getElementById('home-workflow-meta');
+        if (meta) meta.textContent = 'יש שינויים שלא נשמרו · ' + (projectWorkflowDraft.revision != null ? 'גרסה ' + projectWorkflowDraft.revision : 'טרם נשמר');
+        var dirtyNotice = document.getElementById('home-decisions-dirty');
+        if (dirtyNotice) dirtyNotice.classList.remove('hidden');
+    }
+    function onWorkflowStageChange(stage) {
+        if (!Object.prototype.hasOwnProperty.call(workflowStageLabels, stage)) return;
+        workflowDirty = workflowDirty || projectWorkflowDraft.stage !== stage;
+        projectWorkflowDraft.stage = stage;
+        workflowStageDirty = stage !== workflowSavedStage;
+        workflowMessage = '';
+        renderProjectWorkflow();
+        renderProjectHome();
+    }
+    function loadProjectWorkflow() {
+        var p = state.selectedProject;
+        projectWorkflowDraft = { revision: null, stage: 'UNSET', tasks: [], writable: false, loading: true };
+        workflowTaskDrafts = Object.create(null); workflowDirty = false; workflowMessage = ''; workflowSaving = false; workflowSavedStage = 'UNSET'; workflowStageDirty = false;
+        renderProjectWorkflow();
+        if (!p || typeof google === 'undefined' || !google.script || !google.script.run) {
+            projectWorkflowDraft.loading = false; renderProjectWorkflow(); return;
+        }
+        var projectNo = String(p.no);
+        google.script.run.withSuccessHandler(function(res) {
+            if (!state.selectedProject || String(state.selectedProject.no) !== projectNo) return;
+            if (res && res.success) {
+                projectWorkflowDraft = { revision: res.revision == null ? null : res.revision, stage: workflowStageLabels[res.stage] ? res.stage : 'UNSET', tasks: Array.isArray(res.tasks) ? res.tasks : [], writable: res.writable === true, loading: false };
+                workflowSavedStage = projectWorkflowDraft.stage; workflowStageDirty = false;
+                homeBrowseStage = projectWorkflowDraft.stage === 'UNSET' ? 'INITIAL' : projectWorkflowDraft.stage;
+                projectWorkflowDraft.tasks.forEach(function(task) { var stage = task.stage || projectWorkflowDraft.stage; if (!workflowTaskDrafts[stage]) workflowTaskDrafts[stage] = Object.create(null); workflowTaskDrafts[stage][task.id] = task; });
+                if (res.writable !== true) workflowMessage = 'הנתונים זמינים לקריאה בלבד' + (res.error ? ': ' + res.error : '.');
+            } else { projectWorkflowDraft = { revision: null, stage: 'UNSET', tasks: [], writable: false, loading: false }; workflowMessage = (res && (res.error || res.message)) || 'לא ניתן לטעון את תמונת העבודה.'; }
+            workflowDirty = false;
+            renderProjectWorkflow(); renderProjectHome();
+        }).withFailureHandler(function() {
+            if (!state.selectedProject || String(state.selectedProject.no) !== projectNo) return;
+            projectWorkflowDraft = { revision: null, stage: 'UNSET', tasks: [], writable: false, loading: false };
+            workflowMessage = 'לא ניתן לטעון את החלטות העבודה השמורות.';
+            renderProjectWorkflow();
+        }).getProjectWorkflow(p.folderId, p.no, p.name);
+    }
+    function saveProjectWorkflowFromHome() {
+        var p = state.selectedProject;
+        if (!p || !projectWorkflowDraft.writable || projectWorkflowDraft.loading || workflowSaving) return;
+        var payloadTasks = [];
+        Object.keys(workflowTaskDefinitions).forEach(function(stage) {
+            workflowTaskDefinitions[stage].forEach(function(def) {
+                var task = workflowTaskDrafts[stage] && workflowTaskDrafts[stage][def[0]];
+                payloadTasks.push({ id: def[0], status: (task && task.status) || 'NOT_STARTED', note: (task && task.note) || '' });
+            });
+        });
+        var payload = { revision: projectWorkflowDraft.revision, stage: projectWorkflowDraft.stage, tasks: payloadTasks };
+        if (payload.tasks.some(function(task) { return task.status === 'DONE' && !task.note.trim(); })) {
+            workflowMessage = 'כדי לסמן משימה כהושלמה, הוסיפו הערה או הפניה לראיית המקור.'; renderProjectWorkflow();
+            return;
+        }
+        workflowSaving = true; renderProjectWorkflow();
+        google.script.run.withSuccessHandler(function(res) {
+            if (!state.selectedProject || String(state.selectedProject.no) !== String(p.no)) return;
+            workflowSaving = false;
+            if (res && res.success) {
+                projectWorkflowDraft.revision = res.revision == null ? projectWorkflowDraft.revision : res.revision;
+                projectWorkflowDraft.tasks = Array.isArray(res.tasks) ? res.tasks : payload.tasks;
+                workflowTaskDrafts = Object.create(null);
+                projectWorkflowDraft.tasks.forEach(function(task) { var stage = task.stage || projectWorkflowDraft.stage; if (!workflowTaskDrafts[stage]) workflowTaskDrafts[stage] = Object.create(null); workflowTaskDrafts[stage][task.id] = task; });
+                workflowDirty = false;
+                workflowSavedStage = projectWorkflowDraft.stage; workflowStageDirty = false;
+                workflowMessage = 'החלטות העבודה נשמרו עם משתמש ותאריך.';
+            } else {
+                workflowMessage = (res && (res.error || res.message)) || 'השמירה נדחתה. טענו מחדש את תמונת העבודה לפני ניסיון נוסף.';
+            }
+            renderProjectWorkflow();
+            renderProjectHome();
+        }).withFailureHandler(function(err) {
+            if (!state.selectedProject || String(state.selectedProject.no) !== String(p.no)) return;
+            workflowSaving = false;
+            workflowMessage = 'השמירה נכשלה: ' + (err && err.message ? err.message : 'לא ניתן לשמור כרגע.');
+            renderProjectWorkflow();
+            renderProjectHome();
+        }).saveProjectWorkflow(p.folderId, p.no, p.name, payload);
+    }
+    function setPilotMatchCell(cell, row, available, message) {
+        cell.innerHTML = '';
+        if (cell.getAttribute('data-acc-model-edited') === 'true') {
+            cell.textContent = 'נערך בטיוטה הנוכחית; השינוי אינו כלול בצילום המקור האחרון. נדרש סנכרון מחדש.';
+            cell.className = 'py-2 px-3 text-xs min-w-52 text-amber-700';
+            return;
+        }
+        if (!available) { cell.textContent = message || 'צילום הענן אינו זמין לפרויקט זה.'; return; }
+        if (!row) { cell.textContent = 'אין התאמה לקוד המתוכנן בצילום הזמין; נדרש אימות שיוך והיקף סריקה.'; return; }
+        var state = document.createElement('span');
+        state.className = 'text-xs font-semibold ' + (row.status === 'NOT_FOUND_IN_SCOPE' ? 'text-amber-700' : 'text-slate-700');
+        state.textContent = row.status === 'NOT_FOUND_IN_SCOPE' ? 'נדרש אימות שיוך — לא נמצאה התאמה מדויקת בהיקף הסריקה' : (row.statusLabelHe || row.statusLabel || row.status || 'תוצאת סריקה זמינה');
+        cell.appendChild(state);
+        var candidates = row.potentialCandidates || row.possibleCandidates || row.candidates || [];
+        if (candidates.length) {
+            var details = document.createElement('details');
+            details.className = 'mt-1 text-[10px] text-slate-500';
+            var summary = document.createElement('summary');
+            summary.textContent = candidates.length + ' קבצים אפשריים';
+            details.appendChild(summary);
+            var note = document.createElement('div');
+            note.className = 'mt-1';
+            note.textContent = 'הצעות לבדיקה בלבד; כיסוי הבניין והמגרש לא אומת. נדרשת בדיקת מנהל.';
+            details.appendChild(note);
+            candidates.forEach(function(candidate) {
+                var item = document.createElement('div');
+                item.className = 'mt-1 border-t border-slate-100 pt-1';
+                item.textContent = (candidate.name || 'קובץ ללא שם') + ' — ' + (candidate.folderPath || 'נתיב לא זמין');
+                details.appendChild(item);
+            });
+            cell.appendChild(details);
+        }
+    }
+    function markPilotMatchEdited(input, code) {
+        var row = input && input.closest ? input.closest('tr') : null;
+        var cell = row && row.querySelector ? row.querySelector('[data-acc-model-code]') : null;
+        if (!cell) return;
+        cell.setAttribute('data-acc-model-code', encodeURIComponent(code || ''));
+        cell.setAttribute('data-acc-model-edited', 'true');
+        setPilotMatchCell(cell, null, true);
+    }
+    function renderUnregisteredCloudFiles(snapshot) {
+        var count = document.getElementById('unregistered-cloud-count');
+        var body = document.getElementById('unregistered-cloud-body');
+        if (!count || !body) return;
+        body.textContent = '';
+        if (!snapshot || snapshot.available !== true) {
+            count.textContent = 'צילום ענן לא זמין';
+            var unavailable = document.createElement('tr');
+            var unavailableCell = document.createElement('td');
+            unavailableCell.colSpan = 4;
+            unavailableCell.className = 'px-3 py-4 text-slate-400';
+            unavailableCell.textContent = (snapshot && snapshot.message) || 'לא ניתן לטעון את רשימת קובצי הענן.';
+            unavailable.appendChild(unavailableCell);
+            body.appendChild(unavailable);
+            return;
+        }
+        var project = snapshot.project || snapshot.snapshot || {};
+        var recon = project.reconciliation || snapshot.reconciliation || {};
+        var files = (Array.isArray(recon.unregistered) ? recon.unregistered : []).filter(function(file){return !/\.rvt$/i.test(file.name || '');});
+        count.textContent = files.length + ' קבצים שנצפו';
+        if (!files.length) {
+            var empty = document.createElement('tr');
+            var emptyCell = document.createElement('td');
+            emptyCell.colSpan = 4;
+            emptyCell.className = 'px-3 py-4 text-slate-400';
+            emptyCell.textContent = 'לא הוחזרו קבצים לא משויכים בצילום זה.';
+            empty.appendChild(emptyCell);
+            body.appendChild(empty);
+            return;
+        }
+        var dateFormatter = new Intl.DateTimeFormat('he-IL', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jerusalem' });
+        files.forEach(function(file) {
+            var tr = document.createElement('tr');
+            var nameCell = document.createElement('td');
+            nameCell.className = 'px-3 py-2 font-medium text-slate-800';
+            nameCell.dir = 'ltr';
+            var href = '';
+            try { var parsed = new URL(file.webView || ''); if (parsed.protocol === 'https:') href = parsed.href; } catch (ignore) {}
+            if (href) {
+                var link = document.createElement('a');
+                link.href = href;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.className = 'text-blue-700 hover:underline';
+                link.textContent = file.name || 'ללא שם';
+                nameCell.appendChild(link);
+            } else {
+                nameCell.textContent = file.name || 'ללא שם';
+            }
+            tr.appendChild(nameCell);
+            var pathCell = document.createElement('td');
+            pathCell.className = 'px-3 py-2 text-slate-600';
+            pathCell.textContent = file.folderPath || 'נתיב לא זמין';
+            tr.appendChild(pathCell);
+            var versionCell = document.createElement('td');
+            versionCell.className = 'px-3 py-2 text-slate-600';
+            versionCell.textContent = file.versionNumber == null ? '—' : String(file.versionNumber);
+            tr.appendChild(versionCell);
+            var modifiedCell = document.createElement('td');
+            modifiedCell.className = 'px-3 py-2 text-slate-600';
+            var modified = file.lastModifiedTime ? new Date(file.lastModifiedTime) : null;
+            modifiedCell.textContent = modified && !isNaN(modified.getTime()) ? dateFormatter.format(modified) : '—';
+            tr.appendChild(modifiedCell);
+            body.appendChild(tr);
+        });
+    }
+    function applyPilotSnapshotToModelTable(projectNo) {
+        var snapshot = pilotSnapshotCache[String(projectNo)];
+        if (!snapshot) return;
+        var project = snapshot.project || snapshot.snapshot || {};
+        var recon = project.reconciliation || snapshot.reconciliation || {};
+        var index = Object.create(null);
+        (Array.isArray(recon.rows) ? recon.rows : []).forEach(function(row) { if (row && row.modelCode) index[String(row.modelCode)] = row; });
+        document.querySelectorAll('[data-acc-model-code]').forEach(function(cell) {
+            var code = decodeURIComponent(cell.getAttribute('data-acc-model-code') || '');
+            setPilotMatchCell(cell, index[code], snapshot.available === true, snapshot.message);
+        });
+        if (typeof applyModelGovernanceToRegister === 'function') applyModelGovernanceToRegister(projectNo);
+        if (String(state.selectedProject && state.selectedProject.no) === String(projectNo)) { renderUnregisteredCloudFiles(snapshot); renderProjectHome(); }
+    }
+    function ensurePilotCloudSnapshot() {
+        var projectNo = state.selectedProject && state.selectedProject.no;
+        if (!projectNo) return;
+        var key = String(projectNo);
+        if (pilotSnapshotCache[key]) { applyPilotSnapshotToModelTable(projectNo); return; }
+        if (pilotSnapshotPending[key]) return;
+        if (typeof google === 'undefined' || !google.script || !google.script.run) {
+            document.querySelectorAll('[data-acc-model-code]').forEach(function(cell) { setPilotMatchCell(cell, null, false, 'שירות צילום הענן אינו זמין.'); });
+            return;
+        }
+        document.querySelectorAll('[data-acc-model-code]').forEach(function(cell) { cell.textContent = 'טוען סריקת ענן…'; });
+        pilotSnapshotPending[key] = true;
+        var requestGeneration = cloudConnectionGeneration;
+        google.script.run.withSuccessHandler(function(result) {
+            delete pilotSnapshotPending[key];
+            if (requestGeneration !== cloudConnectionGeneration) return;
+            pilotSnapshotCache[key] = result || { available: false, message: 'צילום הענן אינו זמין.' };
+            if (state.selectedProject && String(state.selectedProject.no) === key) applyPilotSnapshotToModelTable(projectNo);
+        }).withFailureHandler(function() {
+            delete pilotSnapshotPending[key];
+            if (requestGeneration !== cloudConnectionGeneration) return;
+            if (state.selectedProject && String(state.selectedProject.no) === key) {
+                document.querySelectorAll('[data-acc-model-code]').forEach(function(cell) { setPilotMatchCell(cell, null, false, 'לא ניתן לטעון את צילום הענן.'); });
+            }
+        }).getPilotCloudSnapshot(projectNo);
+    }
+
+    // GUARANTEED TAB SWITCHER WITH PERMISSION GUARD
+    // ==========================================
+    function switchTab(tabId) {
+        if (tabId === 'db' && !state.hasDbAccess) {
+            showToast("הגישה נדחתה: לשונית מסד הנתונים מוגבלת.", "error");
+            return;
+        }
+
+        const tabs = ['home', 'bim-info', 'mdc', 'architecture-kickoff', 'consultant-kickoff', 'kickoff', 'contacts', 'db', 'cloud-issues', 'publish'];
+        tabs.forEach(t => {
+            const btn = document.getElementById('tab-btn-' + t);
+            const content = document.getElementById('tab-content-' + t);
+            if (btn) {
+                if (t === tabId) {
+                    btn.classList.add('text-blue-600', 'border-blue-600');
+                    btn.classList.remove('text-slate-500', 'border-transparent');
+                    btn.setAttribute('aria-current','page');
+                } else {
+                    btn.classList.remove('text-blue-600', 'border-blue-600');
+                    btn.classList.add('text-slate-500', 'border-transparent');
+                    btn.removeAttribute('aria-current');
+                }
+            }
+            if (content) {
+                if (t === tabId) {
+                    content.classList.remove('hidden');
+                    content.classList.add('block');
+                } else {
+                    content.classList.remove('block');
+                    content.classList.add('hidden');
+                }
+            }
+        });
+        
+        if (tabId === 'mdc') renderMdcStep(state.mdcCurrentStep || 1); 
+        if (tabId === 'contacts') renderContactsTableLocal();
+        if (tabId === 'home') renderProjectHome();
+        if (tabId === 'cloud-issues') loadCloudPanel('issues', false);
+        if (tabId === 'publish') loadPublishControl();
+        if (tabId === 'architecture-kickoff' || tabId === 'kickoff') renderArchitectureKickoffVersions();
+    }
+
+    function renderProjectHome() {
+        var project = state.selectedProject;
+        if (!project) return;
+        var title = document.getElementById('home-project-name');
+        var number = document.getElementById('home-project-number');
+        var stage = document.getElementById('home-stage-value');
+        var stageNote = document.getElementById('home-stage-note');
+        var models = document.getElementById('home-models-value');
+        var docs = document.getElementById('home-docs-value');
+        var contacts = document.getElementById('home-contacts-value');
+        if (title) title.textContent = project.name || 'פרויקט';
+        if (number) number.textContent = 'מספר ' + (project.no || '—');
+        var stageCode = projectWorkflowDraft.stage || 'UNSET';
+        var savedStage = workflowSavedStage || 'UNSET';
+        if (stage) stage.textContent = workflowStageLabels[savedStage] || 'לא אומת · לא ידוע';
+        if (stageNote) stageNote.textContent = savedStage === 'UNSET' ? 'לא קיימת החלטת שלב שמורה.' : (workflowStageDirty ? 'השלב השמור נשאר בתוקף; שינוי ממתין לשמירה.' : 'השלב נשמר כהחלטת מנהל.');
+
+        var modelList = [];
+        try { modelList = typeof buildModelsArray === 'function' ? (buildModelsArray() || []) : []; } catch (ignore) {}
+        if (models) models.textContent = modelList.length ? modelList.length + ' רשומות מתוכננות' : 'רישום לא זמין';
+        var docLink = state.bimInfo && (state.bimInfo.docLink || state.bimInfo.driveFolder || state.bimInfo.acc);
+        if (docs) docs.textContent = docLink ? 'קישור תועד; תוכן לא אומת' : 'קישור טרם תועד';
+        if (contacts) contacts.textContent = (state.contacts || []).length + ' אנשי קשר';
+        renderHomeTimeline();
+
+        var cloud = document.getElementById('home-cloud-state');
+        var sourceNote = document.getElementById('home-source-note');
+        if (cloud) {
+            var snapshot = pilotSnapshotCache[String(project.no)];
+            if (!snapshot) { cloud.textContent = 'צילום הענן טרם נטען'; if (sourceNote) sourceNote.textContent = 'תכנון: נתוני הפרויקט · ענן: צילום טרם נטען'; }
+            else if (snapshot.available !== true) { cloud.textContent = 'צילום הענן אינו זמין'; if (sourceNote) sourceNote.textContent = 'תכנון: נתוני הפרויקט · ענן: צילום לא זמין'; }
+            else {
+                var p = snapshot.project || snapshot.snapshot || {};
+                var verifiedAt = p.verifiedAt || snapshot.verifiedAt || '';
+                var verifiedDate = verifiedAt ? new Date(verifiedAt) : null;
+                var stamp = verifiedDate && !isNaN(verifiedDate.getTime()) ? new Intl.DateTimeFormat('he-IL', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Jerusalem' }).format(verifiedDate) : 'זמן לא זמין';
+                if (sourceNote) sourceNote.textContent = 'נתוני ענן מ־' + stamp + ' · אין רענון אוטומטי';
+                var recon = p.reconciliation || snapshot.reconciliation || {};
+                var rows = Array.isArray(recon.rows) ? recon.rows : [];
+                var needsReview = rows.filter(function(row) { return row && row.status === 'NOT_FOUND_IN_SCOPE'; }).length;
+                cloud.textContent = rows.length + ' קודי מודל מתוכננים · ' + needsReview + ' דורשים אימות התאמה. ייתכן שקיימים קבצים מועמדים; לא להסיק שחסר מודל.';
+            }
+        }
+    }
+
+    function toggleAccordion(contentId, iconId) {
+        const content = document.getElementById(contentId);
+        const icon = document.getElementById(iconId);
+        if (content) {
+            content.classList.toggle('hidden');
+            if (icon) {
+                if (content.classList.contains('hidden')) {
+                    icon.style.transform = 'rotate(0deg)';
+                } else {
+                    icon.style.transform = 'rotate(180deg)';
+                }
+            }
+        }
+    }
+
+    function initTimeDropdown() {
+      const el = document.getElementById("info-weekly-time");
+      if(!el || el.options.length > 1) return; 
+      let html = '<option value="">Time...</option>';
+      for(let h=6; h<=18; h++) {
+        for(let m=0; m<60; m+=15) {
+          if(h===18 && m>0) break;
+          let time = (h<10?'0':'')+h + ":" + (m===0?'00':m);
+          html += '<option value="' + time + '">' + time + '</option>';
+        }
+      }
+      el.innerHTML = html;
+    }
+
+    function loadLocalFallback() {
+        const localData = safeGetLocal('bim_project_' + state.selectedProject.no);
+        state.bimInfo = localData.bimInfo || { code: "", revit: "", cdePlatform: "", docManagement: "", bimPlatform: "", driveFolder: "", acc: "", docLink: "", hub: "", weeklyDay: "", weeklyTime: "" };
+        
+        if (!localData.hasData && !state.bimInfo.code && state.selectedProject && state.selectedProject.projectCode && state.selectedProject.projectCode !== "—") {
+            state.bimInfo.code = state.selectedProject.projectCode;
+        }
+
+        state.kickoff = localData.kickoff || { arcModel: '', grids: '', gridsX: '', gridsY: '', arLevel: '', urs: '', glLevel: '0.00', liveShared: '', licensing: '', hasPhases: '' };
+        state.contacts = localData.contacts || [];
+        state.mdcLots = localData.lots || [{ number: "" }]; 
+        state.mdcBuildings = localData.buildings || [{ name: "", desc: "", floors: "", lot: "", gl: false, glValue: "" }]; 
+        state.mdcBasements = localData.basements || [{ code: "", desc: "", buildings: "", floors: "", lots: "", gl: false, glValue: "" }]; 
+        
+        state.mdcGenModels = localData.genModels || [];
+        state.siteGroups = localData.siteGroups || []; 
+        state.designOptions = localData.designOptions || [];
+        state.modelSchema = localData.modelSchema || null;
+        
+        state.matrix = localData.matrix || {}; 
+        state.notebook = localData.notebook || [];
+        
+        state.modelOverrides = localData.modelOverrides || {}; 
+        state.addedModels = localData.addedModels || [];
+        state.deletedModels = localData.deletedModels || [];
+        state.modelOrder = localData.modelOrder || [];
+        state.sourceModels = Array.isArray(localData.sourceModels) ? localData.sourceModels : (Array.isArray(localData.models) ? localData.models : null);
+        state.modelsDirty = localData.modelsDirty === true;
+        state.regenerateModels = localData.regenerateModels === true;
+        state.modelOrderDirty = localData.modelOrderDirty === true;
+        
+        state.sheetUrl = localData.sheetUrl || "";
+
+        if(!localData.disciplines || localData.disciplines.length === 0) {
+            if(state.allAvailableDisciplines && state.allAvailableDisciplines.length > 0) {
+                state.mdcDisciplines = state.allAvailableDisciplines
+                    .filter(function(d) { return d.isDefault === true; })
+                    .map(function(d) {
+                        return {
+                            he: d.he,
+                            ac: d.ac,
+                            orgCode: d.ac || "",
+                            platform: d.platform || "Revit",
+                            scope: d.scope || "בניין",
+                            isDefault: true,
+                            checked: true
+                        };
+                    });
+            } else { state.mdcDisciplines = []; }
+        } else { state.mdcDisciplines = localData.disciplines; }
+
+    }
+
+    function toggleGridsInputs() {
+        const container = document.getElementById("grids-xy-container");
+        if (container) {
+            if (getRadioValue("kick-grids") === "No") container.classList.remove("hidden");
+            else container.classList.add("hidden");
+        }
+    }
+
+    // --- NOTEBOOK FUNCTIONS ---
+    function renderNotebook() {
+        const container = document.getElementById("notebook-list");
+        if (!container) return;
+
+        if (!state.notebook || state.notebook.length === 0) {
+            container.innerHTML = '<div class="text-xs text-slate-400 italic text-center p-4">עדיין לא נוספו הערות.</div>';
+            return;
+        }
+
+        container.innerHTML = state.notebook.map((note, idx) => `
+            <div class="border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm transition-all group">
+                <div class="px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition" onclick="toggleNotebookEntry(${idx})">
+                    <div class="flex items-center gap-3">
+                        <svg id="note-icon-${idx}" class="w-4 h-4 text-slate-400 transition-transform duration-200 transform -rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                        <span class="font-bold text-slate-700 text-sm">${note.date}</span>
+                        <span class="text-xs text-slate-500 font-medium px-2 py-0.5 bg-slate-100 rounded-md border border-slate-200">${note.user}</span>
+                    </div>
+                    <button type="button" onclick="event.stopPropagation(); deleteNotebookEntry(${idx})" class="text-slate-300 hover:text-red-500 transition opacity-0 group-hover:opacity-100 p-1">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
+                </div>
+                <div id="note-content-${idx}" class="hidden px-4 pb-4 pt-1 text-sm text-slate-600 whitespace-pre-wrap border-t border-slate-50 pl-11" dir="auto">${note.content}</div>
+            </div>
+        `).join('');
+    }
+
+    function toggleNotebookEntry(idx) {
+        const content = document.getElementById('note-content-' + idx);
+        const icon = document.getElementById('note-icon-' + idx);
+        if (content) {
+            content.classList.toggle('hidden');
+            if (icon) {
+                if (content.classList.contains('hidden')) {
+                    icon.style.transform = 'rotate(-90deg)';
+                } else {
+                    icon.style.transform = 'rotate(0deg)';
+                }
+            }
+        }
+    }
+
+    function addNotebookEntry() {
+        const textarea = document.getElementById("notebook-new-content");
+        if (!textarea) return;
+        const content = textarea.value.trim();
+        if (!content) {
+            showToast("תוכן ההערה אינו יכול להיות ריק.", "error");
+            return;
+        }
+
+        if (!state.notebook) state.notebook = [];
+
+        const d = new Date();
+        const dateStr = d.toLocaleDateString('en-GB') + ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        const user = state.currentUserEmail || "Unknown User";
+
+        state.notebook.unshift({
+            id: 'note_' + Date.now(),
+            date: dateStr,
+            user: user,
+            content: content
+        });
+
+        textarea.value = '';
+        saveLocalState();
+        renderNotebook();
+        showToast("ההערה נוספה לפרויקט.", "success");
+    }
+
+    function deleteNotebookEntry(idx) {
+        if (!state.notebook) return;
+        state.notebook.splice(idx, 1);
+        saveLocalState();
+        renderNotebook();
+    }
+    // --------------------------
+
+    function updateProjectUI() {
+        try {
+            const prjCodeEl = document.getElementById("info-prj-code"); if(prjCodeEl) prjCodeEl.value = state.bimInfo.code || ""; 
+            const dayEl = document.getElementById("info-weekly-day"); if(dayEl) dayEl.value = state.bimInfo.weeklyDay || "";
+            const timeEl = document.getElementById("info-weekly-time"); if(timeEl) timeEl.value = state.bimInfo.weeklyTime || "";
+            const revitEl = document.getElementById("info-revit-ver"); if(revitEl) revitEl.value = state.bimInfo.revit || "";
+
+            const docSelect = document.getElementById("info-doc-management"); const docCustom = document.getElementById("info-doc-management-custom");
+            if (docSelect) {
+                let optionsArray = Array.from(docSelect.options).map(function(opt) { return opt.value; });
+                if (state.bimInfo.docManagement && !optionsArray.includes(state.bimInfo.docManagement)) { docSelect.value = "CUSTOM"; if(docCustom) {docCustom.classList.remove("hidden"); docCustom.value = state.bimInfo.docManagement;} } else { docSelect.value = state.bimInfo.docManagement || ""; if(docCustom) {docCustom.classList.add("hidden"); docCustom.value = "";} }
+            }
+
+            const cdePlat = document.getElementById("info-cde-platform"); if(cdePlat) cdePlat.value = state.bimInfo.cdePlatform || "";
+            const bimPlat = document.getElementById("info-bim-platform"); if(bimPlat) bimPlat.value = state.bimInfo.bimPlatform || "";
+            
+            const driveLnk = document.getElementById("info-drive-link"); if(driveLnk) driveLnk.value = state.bimInfo.driveFolder || 'https://drive.google.com/drive/folders/' + state.selectedProject.folderId;
+            const accLnk = document.getElementById("info-acc-link"); if(accLnk) accLnk.value = state.bimInfo.acc || "";
+            const docLnk = document.getElementById("info-doc-link"); if(docLnk) docLnk.value = state.bimInfo.docLink || "";
+
+            let loadedHub = state.bimInfo.hub || ""; const hubCheckbox = document.getElementById("info-hub-checkbox"); const hubInput = document.getElementById("info-hub-link");
+            if (hubCheckbox && hubInput) {
+                if (loadedHub.startsWith("AMEC")) { hubCheckbox.checked = true; hubInput.value = loadedHub.replace("AMEC", "").replace(/^ - /, "").trim(); } else { hubCheckbox.checked = false; hubInput.value = loadedHub; }
+                hubInput.disabled = hubCheckbox.checked;
+            }
+            if (typeof apsRenderLinkStatus === 'function') apsRenderLinkStatus();
+
+            setRadioValue("kick-arc-model", state.kickoff.arcModel); 
+            setRadioValue("kick-grids", state.kickoff.grids); 
+            
+            const gridsXEl = document.getElementById("kick-grids-x"); if(gridsXEl) gridsXEl.value = state.kickoff.gridsX || "";
+            const gridsYEl = document.getElementById("kick-grids-y"); if(gridsYEl) gridsYEl.value = state.kickoff.gridsY || "";
+            toggleGridsInputs();
+
+            setRadioValue("kick-ar-level", state.kickoff.arLevel); setRadioValue("kick-urs", state.kickoff.urs); setRadioValue("kick-live-shared", state.kickoff.liveShared); setRadioValue("kick-licensing", state.kickoff.licensing);
+            const glEl = document.getElementById("kick-gl-level"); if(glEl) glEl.value = state.kickoff.glLevel !== undefined && state.kickoff.glLevel !== "" ? state.kickoff.glLevel : "0.00";
+
+            setRadioValue("kick-phases", state.kickoff.hasPhases);
+
+            renderTeamTable(); 
+            renderNotebook();
+            
+            state.mdcCurrentStep = state.mdcCurrentStep || 1;
+            renderMdcStep(state.mdcCurrentStep); 
+            
+            if (typeof renderContactsTableLocal === 'function') {
+                renderContactsTableLocal(); 
+            }
+            updateLinkButtons();
+            renderProjectHome();
+        } catch(e) { console.error("Error in updateProjectUI:", e); }
+    }
+
+    function loadCanonicalRegisterFromSource(data) {
+      if (!data || !Array.isArray(data.models)) return false;
+      if (state.modelsDirty === true || state.regenerateModels === true || state.modelOrderDirty === true) return false;
+
+      state.sourceModels = data.models.map(function(model) { return Object.assign({}, model); });
+      state.modelOverrides = {};
+      state.addedModels = [];
+      state.deletedModels = [];
+      state.modelOrder = [];
+      state.modelsDirty = false;
+      state.regenerateModels = false;
+      state.modelOrderDirty = false;
+      return true;
+    }
+
+    function openProjectDetails(projectNo) {
+      try {
+          if (workflowDirty) {
+              showToast('יש החלטות עבודה שלא נשמרו. שמרו אותן לפני טעינת פרויקט מחדש.', 'error');
+              return;
+          }
+          initTimeDropdown();
+          var nextProject = state.projects.find(function(p) { return String(p.no) === String(projectNo); });
+          if (!nextProject) {
+              alert("קריטי: לא ניתן למצוא את הפרויקט " + projectNo + " in memory. יש לרענן את הדף.");
+              return;
+          }
+          var changingCloudProject = !state.selectedProject || String(state.selectedProject.no) !== String(nextProject.no);
+          var changingArchitectureProject = state.selectedProject && architectureProjectKey(state.selectedProject) !== architectureProjectKey(nextProject);
+          if (changingArchitectureProject && architectureKickoffBusy) { showToast('שמירת התהליך עדיין מתבצעת. נסו לעבור פרויקט לאחר סיומה.', 'error'); return; }
+          if (changingArchitectureProject && architectureKickoffDirty && !window.confirm('יש קלט פגישת התנעה אדריכלית שלא נשמר. לעבור לפרויקט ולמחוק את השינויים?')) return;
+          if (changingArchitectureProject) {
+              architectureKickoffState = { revision:0, draft:null, draftRevision:0, versions:[], writable:false };
+              architectureKickoffDirty=false; architectureKickoffBusy=false; architectureKickoffLoadedKey='';
+              ['architecture-kickoff-date','architecture-kickoff-attendees','architecture-kickoff-notes','architecture-kickoff-survey','architecture-kickoff-views'].forEach(function(id){var el=document.getElementById(id);if(el)el.value='';});
+              renderArchitectureKickoffVersions(); architectureSetBusy(false); architectureRenderSaveState('טוען נתוני פרויקט…');
+          }
+          state.selectedProject = nextProject;
+          if (changingCloudProject && typeof window.invalidateLiveCloudCache === 'function') window.invalidateLiveCloudCache();
+          if (changingCloudProject && typeof window.ccRefreshStatus === 'function') window.ccRefreshStatus();
+          
+          const requestedProjectNo = String(state.selectedProject.no);
+          
+          showView('project-details');
+          
+          const titleEl = document.getElementById("details-prj-title");
+          if(titleEl) titleEl.textContent = state.selectedProject.name; 
+          
+          const subtitleEl = document.getElementById("details-prj-subtitle");
+          if(subtitleEl) subtitleEl.textContent = state.selectedProject.no;
+          
+          const infoNoEl = document.getElementById("info-prj-no");
+          if(infoNoEl) infoNoEl.textContent = state.selectedProject.no; 
+          
+          const infoNameEl = document.getElementById("info-prj-name");
+          if(infoNameEl) infoNameEl.textContent = state.selectedProject.name;
+
+          let statusText = (state.selectedProject.status || 'UNKNOWN').toString().trim().toUpperCase();
+          let statusBadgeColor = statusText === "ACTIVE" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : statusText === "ON HOLD" ? "bg-amber-100 text-amber-700 border-amber-200" : statusText === "COMPLETED" ? "bg-blue-100 text-blue-700 border-blue-200" : "bg-red-100 text-red-700 border-red-200";
+          
+          const statusEl = document.getElementById("info-prj-status");
+          if(statusEl) statusEl.innerHTML = '<span class="' + statusBadgeColor + ' border text-xs px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">' + ({ACTIVE:'פעיל','ON HOLD':'בהמתנה',COMPLETED:'הושלם',CANCELLED:'בוטל',UNKNOWN:'לא ידוע'}[statusText] || statusText) + '</span>';
+
+          switchTab('home');
+          loadLocalFallback();
+          updateProjectUI();
+          renderProjectHome();
+          loadProjectWorkflow();
+          loadArchitectureKickoffState(false);
+          ensurePilotCloudSnapshot();
+
+          showToast("מסנכרן נתונים עדכניים...", "success");
+          
+          google.script.run.withSuccessHandler(function(res) {
+              if (!state.selectedProject || String(state.selectedProject.no) !== requestedProjectNo) {
+                  return;
+              }
+              // Sheet link is known even when the sheet has no project data yet.
+              if (res && res.success && res.data && res.data.sheetUrl) state.sheetUrl = res.data.sheetUrl;
+              state.sheetLoadedFor = requestedProjectNo;
+
+              const currentLocalData = safeGetLocal('bim_project_' + state.selectedProject.no);
+              const timeSinceLastSave = Date.now() - (currentLocalData.lastSaveTime || 0);
+              
+              if (timeSinceLastSave < 20000) {
+                  if (typeof apsRenderLinkStatus === 'function') apsRenderLinkStatus();
+                  return;
+              }
+
+              if (res && res.success && res.data) {
+                  if (res.data.hasData) {
+                      state.bimInfo = res.data.bimInfo || { code: "", revit: "", cdePlatform: "", docManagement: "", bimPlatform: "", driveFolder: "", acc: "", docLink: "", hub: "", weeklyDay: "", weeklyTime: "" };
+                      state.kickoff = res.data.kickoff || { arcModel: '', grids: '', gridsX: '', gridsY: '', arLevel: '', urs: '', glLevel: '0.00', liveShared: '', licensing: '', hasPhases: '' };
+                      state.contacts = res.data.contacts || [];
+                      state.mdcLots = (res.data.lots && res.data.lots.length > 0) ? res.data.lots : [{ number: "" }];
+                      state.mdcBuildings = (res.data.buildings && res.data.buildings.length > 0) ? res.data.buildings : [{ name: "", desc: "", floors: "", lot: "", gl: false, glValue: "" }];
+                      state.mdcBasements = (res.data.basements && res.data.basements.length > 0) ? res.data.basements : [{ code: "", desc: "", buildings: "", floors: "", lots: "", gl: false, glValue: "" }];
+                      loadCanonicalRegisterFromSource(res.data);
+                      
+                      state.mdcGenModels = res.data.genModels || [];
+                      state.siteGroups = res.data.siteGroups || [];
+                      state.designOptions = res.data.designOptions || [];
+                      state.modelSchema = res.data.modelSchema || state.modelSchema || null;
+
+                      state.notebook = (res.data.notebook && res.data.notebook.length > 0) ? res.data.notebook : state.notebook;
+
+                      if (res.data.matrix) {
+                          state.matrix = {};
+                          Object.keys(res.data.matrix).forEach(function(k) { state.matrix[k] = res.data.matrix[k]; });
+                      }
+
+                      if(!res.data.disciplines || res.data.disciplines.length === 0) {
+                          if(state.allAvailableDisciplines && state.allAvailableDisciplines.length > 0) { state.mdcDisciplines = state.allAvailableDisciplines.filter(function(d) { return d.isDefault === true; }).map(function(d) { return { he: d.he, ac: d.ac, isDefault: true, checked: true }; }); } else { state.mdcDisciplines = []; }
+                      } else { state.mdcDisciplines = res.data.disciplines; }
+                      
+                      state.sheetUrl = res.data.sheetUrl || "";
+                  } else {
+                      if (!state.bimInfo.code && state.selectedProject && state.selectedProject.projectCode && state.selectedProject.projectCode !== "—") {
+                          state.bimInfo.code = state.selectedProject.projectCode;
+                      }
+                  }
+              }
+
+              updateProjectUI();
+              renderProjectHome();
+              saveLocalStateOnly();
+              
+          }).withFailureHandler(function(err) {
+              if (!state.selectedProject || String(state.selectedProject.no) !== requestedProjectNo) return;
+              state.sheetLoadedFor = requestedProjectNo;
+              if (typeof apsRenderLinkStatus === 'function') apsRenderLinkStatus();
+              showToast("סנכרון הענן נכשל. ממשיכים לעבוד באופן מקומי.", "error");
+          }).pullProjectDataFromSheet(state.selectedProject.folderId, state.selectedProject.no, state.selectedProject.name);
+          
+      } catch(e) {
+          alert("שגיאה קריטית בפתיחת הפרויקט: " + e.message);
+          console.error("OpenProjectDetails error:", e);
+      }
+    }
+
+    function renderTeamTable() {
+      const p = state.selectedProject; if(!p) return; const tbody = document.getElementById("info-team-table");
+      if(tbody) tbody.innerHTML = '<tr class="hover:bg-slate-50 transition"><td class="px-4 py-2.5 font-semibold text-slate-700 text-xs w-1/3">מוביל BIM</td><td class="px-4 py-2.5 font-bold text-slate-900">' + (p.teamLeader || '—') + '</td></tr><tr class="hover:bg-slate-50 transition"><td class="px-4 py-2.5 font-semibold text-slate-700 text-xs w-1/3">מנהל BIM</td><td class="px-4 py-2.5 font-bold text-slate-900">' + (p.manager || '—') + '</td></tr><tr class="hover:bg-slate-50 transition"><td class="px-4 py-2.5 font-semibold text-slate-700 text-xs w-1/3">מתאם</td><td class="px-4 py-2.5 font-bold text-slate-900">' + (p.coordinator || '—') + '</td></tr>';
+    }
+
+    function handleHubCheckbox() { const cb = document.getElementById('info-hub-checkbox'); const input = document.getElementById('info-hub-link'); if (cb && input) { if (cb.checked) { input.value = ""; input.disabled = true; } else { input.disabled = false; input.focus(); } saveLocalState(); } }
+    
+    function enableHubInput() { 
+        const cb = document.getElementById('info-hub-checkbox'); 
+        const input = document.getElementById('info-hub-link'); 
+        if (cb && input) { cb.checked = false; input.disabled = false; input.removeAttribute('disabled'); input.focus(); saveLocalState(); } 
+    }
+
+    function openWorkspaceLink(inputId) {
+        const input = document.getElementById(inputId);
+        if(!input) return;
+        const val = input.value.trim();
+        if (val) {
+            const url = val.startsWith('http') ? val : 'https://' + val;
+            window.open(url, '_blank');
+        } else {
+            showToast("נא להזין קישור תקין.", "error");
+        }
+    }
+
+    function updateLinkButtons() {
+      const driveLnk = document.getElementById("info-drive-link"); const driveBtn = document.getElementById("btn-drive-link");
+      if (driveLnk && driveBtn) { if (driveLnk.value.trim()) { driveBtn.classList.remove("opacity-50", "cursor-not-allowed"); } else { driveBtn.classList.add("opacity-50", "cursor-not-allowed"); } }
+      const accLnk = document.getElementById("info-acc-link"); const accBtn = document.getElementById("btn-acc-link");
+      if (accLnk && accBtn) { if (accLnk.value.trim()) { accBtn.classList.remove("opacity-50", "cursor-not-allowed"); } else { accBtn.classList.add("opacity-50", "cursor-not-allowed"); } }
+      const docLnk = document.getElementById("info-doc-link"); const docBtn = document.getElementById("btn-doc-link");
+      if (docLnk && docBtn) { if (docLnk.value.trim()) { docBtn.classList.remove("opacity-50", "cursor-not-allowed"); } else { docBtn.classList.add("opacity-50", "cursor-not-allowed"); } }
+    }
+
+    function handleDocManagementChange() {
+        const docSelect = document.getElementById("info-doc-management");
+        const docCustom = document.getElementById("info-doc-management-custom");
+        if(docSelect && docCustom) {
+            if(docSelect.value === "CUSTOM") { 
+                docCustom.classList.remove("hidden"); 
+            } else { 
+                docCustom.classList.add("hidden"); 
+                const selectedEDMS = state.edmsPlatforms.find(function(p) { return p.name === docSelect.value; });
+                if (selectedEDMS && selectedEDMS.link) {
+                    const docLnk = document.getElementById("info-doc-link");
+                    if(docLnk) docLnk.value = selectedEDMS.link;
+                    updateLinkButtons();
+                }
+            }
+        }
+        saveLocalState();
+    }
+
+    function saveLocalStateOnly() {
+      if(!state.selectedProject) return;
+      const codeEl = document.getElementById("info-prj-code"); if(codeEl) state.bimInfo.code = codeEl.value; 
+      const dayEl = document.getElementById("info-weekly-day"); if(dayEl) state.bimInfo.weeklyDay = dayEl.value;
+      const timeEl = document.getElementById("info-weekly-time"); if(timeEl) state.bimInfo.weeklyTime = timeEl.value;
+      
+      const revitVer = document.getElementById("info-revit-ver"); if(revitVer) state.bimInfo.revit = revitVer.value; 
+      const cdePlat = document.getElementById("info-cde-platform"); if(cdePlat) state.bimInfo.cdePlatform = cdePlat.value; 
+      const bimPlat = document.getElementById("info-bim-platform"); if(bimPlat) state.bimInfo.bimPlatform = bimPlat.value;
+      
+      const driveLnk = document.getElementById("info-drive-link"); if(driveLnk) state.bimInfo.driveFolder = driveLnk.value; 
+      const accLnk = document.getElementById("info-acc-link"); if(accLnk) state.bimInfo.acc = accLnk.value; 
+      const docLnk = document.getElementById("info-doc-link"); if(docLnk) state.bimInfo.docLink = docLnk.value; 
+
+      state.kickoff.arcModel = getRadioValue("kick-arc-model"); 
+      state.kickoff.grids = getRadioValue("kick-grids"); 
+      const gridsXEl = document.getElementById("kick-grids-x"); if(gridsXEl) state.kickoff.gridsX = gridsXEl.value;
+      const gridsYEl = document.getElementById("kick-grids-y"); if(gridsYEl) state.kickoff.gridsY = gridsYEl.value;
+
+      state.kickoff.arLevel = getRadioValue("kick-ar-level"); state.kickoff.urs = getRadioValue("kick-urs"); 
+      const glLvl = document.getElementById("kick-gl-level"); if(glLvl) state.kickoff.glLevel = glLvl.value; 
+      state.kickoff.liveShared = getRadioValue("kick-live-shared"); state.kickoff.licensing = getRadioValue("kick-licensing");
+      
+      state.kickoff.hasPhases = getRadioValue("kick-phases");
+
+      let hubVal = ""; const hubCb = document.getElementById("info-hub-checkbox"); const hubLnk = document.getElementById("info-hub-link");
+      if (hubCb && hubCb.checked) { hubVal = "AMEC"; }
+      let extraText = hubLnk ? hubLnk.value.trim() : ""; 
+      if (extraText) { hubVal = hubVal ? hubVal + " - " + extraText : extraText; } 
+      state.bimInfo.hub = hubVal; 
+      
+      const docSelect = document.getElementById("info-doc-management");
+      const docCustom = document.getElementById("info-doc-management-custom");
+      if(docSelect) { state.bimInfo.docManagement = (docSelect.value === "CUSTOM" && docCustom) ? docCustom.value : docSelect.value; }
+
+      state.selectedProject.projectCode = state.bimInfo.code || "—";
+      let projInArray = state.projects.find(function(p) { return p.no === state.selectedProject.no; });
+      if (projInArray) projInArray.projectCode = state.bimInfo.code || "—";
+
+      const toSave = { 
+          bimInfo: state.bimInfo, 
+          kickoff: state.kickoff, 
+          contacts: state.contacts, 
+          lots: state.mdcLots, 
+          buildings: state.mdcBuildings, 
+          basements: state.mdcBasements, 
+          genModels: state.mdcGenModels, 
+          siteGroups: state.siteGroups, 
+          designOptions: state.designOptions, modelSchema: state.modelSchema || null,
+          matrix: state.matrix, 
+          disciplines: state.mdcDisciplines, 
+          modelOverrides: state.modelOverrides, 
+          addedModels: state.addedModels,
+          deletedModels: state.deletedModels,
+          modelOrder: state.modelOrder,
+          sourceModels: state.sourceModels,
+          modelsDirty: state.modelsDirty === true,
+          regenerateModels: state.regenerateModels === true,
+          modelOrderDirty: state.modelOrderDirty === true,
+          notebook: state.notebook,
+          sheetUrl: state.sheetUrl, 
+          lastSaveTime: Date.now(),
+          hasData: true 
+      };
+      safeSetLocal('bim_project_' + state.selectedProject.no, JSON.stringify(toSave));
+    }
+
+    function acceptSavedModelTable(payload) {
+      if (!payload || payload.modelsDirty !== true || !Array.isArray(payload.models)) return;
+      state.sourceModels = payload.models.map(function(model) {
+        const saved = Object.assign({}, model);
+        saved.id = String(saved.code || saved.id || '');
+        return saved;
+      });
+      state.modelOverrides = {};
+      state.addedModels = [];
+      state.deletedModels = [];
+      state.modelOrder = [];
+      state.modelsDirty = false;
+      state.regenerateModels = false;
+      state.modelOrderDirty = false;
+      saveLocalStateOnly();
+    }
+
+    function saveLocalState() {
+      saveLocalStateOnly(); 
+      const statusEl = document.getElementById("cloud-save-status");
+      if(statusEl) { statusEl.innerHTML = 'שומר...'; statusEl.classList.remove("opacity-0", "text-emerald-500", "text-red-500"); statusEl.classList.add("text-slate-500"); }
+      
+      const currentProjNo = state.selectedProject ? String(state.selectedProject.no) : null;
+      
+      clearTimeout(autoSaveTimer); 
+      autoSaveTimer = setTimeout(function() { 
+          syncToCloudSilent(currentProjNo); 
+      }, 2500); 
+    }
+
+    function openResetModal() {
+        const modal = document.getElementById('reset-sort-modal');
+        if(modal) modal.classList.remove('hidden');
+    }
+
+    function closeResetModal() {
+        const modal = document.getElementById('reset-sort-modal');
+        if(modal) modal.classList.add('hidden');
+    }
+
+    function confirmResetSort() {
+        state.modelOrder = []; 
+        state.modelOrderDirty = true;
+        if (typeof markModelsDirty === 'function') markModelsDirty(false);
+        saveLocalState();
+        renderFinalModelTable();
+        closeResetModal();
+        showToast("הטבלה מוינה לפי התחום כברירת מחדל.", "success");
+    }
+
+    function saveModelSort() {
+        saveLocalState();
+        showToast("סדר המיון נשמר בהצלחה.", "success");
+    }
+
+    var architectureKickoffState = { revision: 0, draft: null, draftRevision: 0, versions: [], writable: false };
+    var architectureKickoffDirty = false;
+    var architectureKickoffBusy = false;
+    var architectureKickoffLoadedKey = '';
+    function architectureProjectKey(project) { return project ? String(project.folderId || '') + '|' + String(project.no || '') : ''; }
+    function architectureStillOnProject(key) { return !!state.selectedProject && architectureProjectKey(state.selectedProject) === key; }
+    function architectureSetBusy(busy) {
+        architectureKickoffBusy = busy;
+        ['btn-architecture-kickoff-save','btn-architecture-kickoff-generate'].forEach(function(id) { var b=document.getElementById(id); if(b) b.disabled=busy || !architectureKickoffState.writable; });
+        document.querySelectorAll('#tab-content-architecture-kickoff input, #tab-content-architecture-kickoff textarea').forEach(function(el) { el.disabled=busy || !architectureKickoffState.writable; });
+        document.querySelectorAll('#architecture-kickoff-versions button').forEach(function(el){el.disabled=busy;});
+        var generate=document.getElementById('btn-architecture-kickoff-generate'); if(generate) generate.disabled=busy || !architectureKickoffState.writable;
+    }
+    function architectureMeetingFromForm() {
+        function val(id) { var el=document.getElementById(id); return el ? el.value : ''; }
+        return { date:val('architecture-kickoff-date'), attendees:val('architecture-kickoff-attendees'), notes:val('architecture-kickoff-notes'), surveyLink:val('architecture-kickoff-survey'), consultantWorkViews:val('architecture-kickoff-views').split(/[\n,;]+/).map(function(x){return x.trim();}).filter(Boolean) };
+    }
+    function architecturePayloadFromForm() {
+        if (typeof saveLocalStateOnly === 'function') saveLocalStateOnly();
+        var payload={ bimInfo:JSON.parse(JSON.stringify(state.bimInfo || {})), kickoff:JSON.parse(JSON.stringify(state.kickoff || {})), meeting:architectureMeetingFromForm() };
+        payload.kickoff.arcModel=getRadioValue('kick-arc-model'); payload.kickoff.grids=getRadioValue('kick-grids');
+        var gx=document.getElementById('kick-grids-x'), gy=document.getElementById('kick-grids-y'); payload.kickoff.gridsX=gx?gx.value:''; payload.kickoff.gridsY=gy?gy.value:'';
+        payload.kickoff.arLevel=getRadioValue('kick-ar-level'); payload.kickoff.urs=getRadioValue('kick-urs'); payload.kickoff.licensing=getRadioValue('kick-licensing');
+        var project=state.selectedProject;
+        if(project) { payload.bimInfo.projectNumber=project.no; payload.bimInfo.projectName=project.name; payload.bimInfo.manager=project.manager; payload.bimInfo.coordinator=project.coordinator; }
+        return payload;
+    }
+    function markArchitectureKickoffDirty() {
+        if (architectureKickoffBusy) return;
+        architectureKickoffDirty=true;
+        var status=document.getElementById('architecture-kickoff-save-state'); if(status) status.textContent='יש שינויים שלא נשמרו. הפקת מסמך תשמור אותם אוטומטית.';
+        var gen=document.getElementById('btn-architecture-kickoff-generate'); if(gen) gen.disabled=!architectureKickoffState.writable || architectureKickoffBusy; var save=document.getElementById('btn-architecture-kickoff-save'); if(save) save.disabled=!architectureKickoffState.writable || architectureKickoffBusy;
+    }
+    function loadArchitectureKickoffState(force) {
+        var p=state.selectedProject; if(!p || !p.folderId || typeof google === 'undefined' || !google.script || !google.script.run) return;
+        if (architectureKickoffDirty && !force) return;
+        architectureSetBusy(false);
+        if (architectureKickoffDirty && force && !window.confirm('קיימים שינויים שלא נשמרו. לטעון מחדש ולמחוק אותם?')) return;
+        var key=architectureProjectKey(p); architectureKickoffLoadedKey=key;
+        google.script.run.withSuccessHandler(function(res) {
+            if(!architectureStillOnProject(key)) return;
+            if(!res || !res.success) { architectureKickoffState.writable=false; architectureRenderSaveState((res && res.error) || 'לא ניתן לטעון את התהליך.'); renderArchitectureKickoffVersions(); return; }
+            architectureKickoffState={ revision:res.revision == null ? 0 : res.revision, draft:res.draft || null, draftRevision:res.draftRevision == null ? 0 : res.draftRevision, versions:Array.isArray(res.versions)?res.versions:[], writable:res.writable === true };
+            architectureKickoffDirty=false;
+            architectureApplyDraftToForm(architectureKickoffState.draft);
+            architectureRenderSaveState(architectureKickoffState.draft ? 'הקלט השמור מוכן להפקה.' : 'לחיצה על הפקת מסמך שומרת את הקלט ומפיקה.');
+            architectureSetBusy(false); renderArchitectureKickoffVersions();
+        }).withFailureHandler(function(err) { if(!architectureStillOnProject(key)) return; architectureKickoffState.writable=false; architectureRenderSaveState('טעינת התהליך נכשלה: '+(err && err.message || 'שגיאה')); architectureSetBusy(false); }).getArchitectureKickoff(p.folderId,p.no,p.name);
+    }
+    function architectureApplyDraftToForm(draft) {
+        if(!draft || !draft.meeting) return;
+        var fields={ 'architecture-kickoff-date':'date','architecture-kickoff-attendees':'attendees','architecture-kickoff-notes':'notes','architecture-kickoff-survey':'surveyLink','architecture-kickoff-views':'consultantWorkViews' };
+        Object.keys(fields).forEach(function(id) { var el=document.getElementById(id); if(el) el.value=draft.meeting[fields[id]] || ''; });
+        // Restore only architecture-owned questionnaire answers. Shared project facts remain canonical in Project Info and the workbook.
+        if(draft.kickoff) {
+            setRadioValue('kick-arc-model',draft.kickoff.arcModel); setRadioValue('kick-grids',draft.kickoff.grids);
+            setRadioValue('kick-ar-level',draft.kickoff.arLevel); setRadioValue('kick-urs',draft.kickoff.urs); setRadioValue('kick-licensing',draft.kickoff.licensing);
+            var gx=document.getElementById('kick-grids-x'), gy=document.getElementById('kick-grids-y'); if(gx) gx.value=draft.kickoff.gridsX || ''; if(gy) gy.value=draft.kickoff.gridsY || ''; toggleGridsInputs();
+        }
+    }
+    function architectureRenderSaveState(text) { var el=document.getElementById('architecture-kickoff-save-state'); if(el) el.textContent=text; }
+    function saveArchitectureKickoffDraftFromForm() { architectureRunKickoff(false); }
+    function generateArchitectureKickoffFromForm() { architectureRunKickoff(true); }
+
+    // One flow for both buttons: (1) sync the project sheet so it matches the screen,
+    // (2) save the meeting input as a draft, (3) optionally generate the document.
+    function architectureRunKickoff(generate) {
+        var p=state.selectedProject; if(!p || architectureKickoffBusy) return;
+        if(!architectureKickoffState.writable) return showToast('שמירת התהליך אינה זמינה לפרויקט זה.','error');
+        var key=architectureProjectKey(p);
+        var fail=function(msg) { if(!architectureStillOnProject(key)) return; architectureSetBusy(false); architectureRenderSaveState(msg); showToast(msg,'error'); };
+        architectureSetBusy(true); architectureRenderSaveState('מסנכרן את נתוני הפרויקט…');
+        google.script.run.withSuccessHandler(function(syncRes) {
+            if(!architectureStillOnProject(key)) return;
+            if(!syncRes || !syncRes.success) return fail('סנכרון גיליון הפרויקט נכשל: '+((syncRes && syncRes.error) || 'שגיאה'));
+            if(syncRes.url) state.sheetUrl=syncRes.url;
+            var payload=architecturePayloadFromForm();
+            architectureRenderSaveState('שומר את קלט הפגישה…');
+            google.script.run.withSuccessHandler(function(res) {
+                if(!architectureStillOnProject(key)) return;
+                if(!res || !res.success) return fail((res && res.error) || 'שמירת הקלט נכשלה.');
+                architectureKickoffState={revision:res.revision == null ? 0 : res.revision,draft:res.draft || payload,draftRevision:res.draftRevision == null ? 0 : res.draftRevision,versions:Array.isArray(res.versions)?res.versions:architectureKickoffState.versions,writable:res.writable === true};
+                architectureKickoffDirty=false;
+                if(!generate) { architectureSetBusy(false); architectureRenderSaveState('הקלט נשמר.'); renderArchitectureKickoffVersions(); showToast('קלט הפגישה נשמר.','success'); return; }
+                architectureRenderSaveState('מפיק את מסמך הפרויקט… (עשוי להימשך כדקה)');
+                google.script.run.withSuccessHandler(function(gen) {
+                    if(!architectureStillOnProject(key)) return;
+                    architectureSetBusy(false);
+                    if(!gen || !gen.success) return fail('הפקת המסמך נכשלה: '+((gen && gen.error) || 'שגיאה'));
+                    architectureAcceptState(gen); renderArchitectureKickoffVersions();
+                    if(gen.generationError) { architectureRenderSaveState('ההפקה נכשלה: '+gen.generationError); showToast('ההפקה נכשלה; פרטי השגיאה מופיעים בהיסטוריה.','error'); }
+                    else {
+                        var last=(architectureKickoffState.versions || []).filter(function(v){ return v.documentUrl; }).slice(-1)[0];
+                        architectureRenderSaveState('המסמך נוצר ונשמר בהיסטוריית הגרסאות.');
+                        showToast('מסמך פגישת ההתנעה נוצר.','success');
+                        if(last && last.documentUrl) window.open(last.documentUrl,'_blank');
+                    }
+                }).withFailureHandler(function(err) { fail('הפקת המסמך נכשלה: '+(err && err.message || 'שגיאה')); })
+                  .generateArchitectureKickoff(p.folderId,p.no,p.name,{revision:architectureKickoffState.revision,payload:architectureKickoffState.draft});
+            }).withFailureHandler(function(err) { fail('שמירת הקלט נכשלה: '+(err && err.message || 'שגיאה')); })
+              .saveArchitectureKickoffDraft(p.folderId,p.no,p.name,{revision:architectureKickoffState.revision,payload:payload});
+        }).withFailureHandler(function(err) { fail('סנכרון גיליון הפרויקט נכשל: '+(err && err.message || 'שגיאה')); })
+          .generateMasterProjectSheet(p.folderId,p.no,p.name,buildMasterSyncPayload(p));
+    }    function architectureAcceptState(res) { architectureKickoffState={revision:res.revision == null ? architectureKickoffState.revision : res.revision,draft:res.draft || architectureKickoffState.draft,draftRevision:res.draftRevision == null ? architectureKickoffState.draftRevision : res.draftRevision,versions:Array.isArray(res.versions)?res.versions:architectureKickoffState.versions,writable:res.writable === true}; }
+    function architectureStableJson(value) { if(Array.isArray(value)) return '['+value.map(architectureStableJson).join(',')+']'; if(value && typeof value==='object') return '{'+Object.keys(value).sort().filter(function(k){return typeof value[k]!=='undefined';}).map(function(k){return JSON.stringify(k)+':'+architectureStableJson(value[k]);}).join(',')+'}'; return JSON.stringify(value); }
+    function architectureSafeText(value) { return String(value == null ? '' : value).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];}); }
+    function architectureFormatDate(value) { if(!value) return ''; var d=new Date(value); return isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat('he-IL',{dateStyle:'medium',timeStyle:'short'}).format(d); }
+    function architectureVersionStatus(status) { return ({GENERATING:'בתהליך הפקה',GENERATION_FAILED:'ההפקה נכשלה',GENERATED:'נוצרה',APPROVED:'נבדקה',CHANGES_REQUESTED:'נדרשים שינויים'})[status] || 'סטטוס לא ידוע'; }
+    function renderArchitectureKickoffVersions() {
+        var host=document.getElementById('architecture-kickoff-versions'), library=document.getElementById('project-document-library'); if(!host && !library) return;
+        var versions=architectureKickoffState.versions || [];
+        if(host) host.innerHTML=versions.length ? '' : '<p class="text-sm text-slate-500">עדיין לא נוצרו גרסאות.</p>';
+        if(library) library.innerHTML='';
+        var libraryCount=0;
+        versions.forEach(function(v) {
+            var rawId=String(v.id || ''), id=architectureSafeText(rawId), statusLabel=architectureVersionStatus(v.status), created=architectureSafeText(architectureFormatDate(v.createdAt)), who=architectureSafeText(v.createdBy || '');
+            var card=document.createElement('article'); card.id='architecture-kickoff-version-'+id; card.className='rounded-xl border border-slate-200 bg-slate-50 p-4';
+            var heading=document.createElement('div'); heading.className='flex flex-wrap items-start justify-between gap-3';
+            var title=document.createElement('div'); title.innerHTML='<div class="font-bold text-slate-800">גרסת מסמך · '+created+'</div><div class="mt-1 text-xs text-slate-500">'+who+' · '+architectureSafeText(statusLabel)+'</div>'; heading.appendChild(title);
+            if(v.documentUrl) { var link=document.createElement('a'); link.href=v.documentUrl; link.target='_blank'; link.rel='noopener'; link.textContent='פתיחת מסמך ↗'; link.className='text-sm font-bold text-teal-700'; heading.appendChild(link); }
+            card.appendChild(heading);
+            if(v.failure) { var failure=document.createElement('p'); failure.className='mt-2 text-sm text-red-700'; failure.textContent='פרטי ההפקה: '+v.failure; card.appendChild(failure); }
+            if(v.reviewNote || v.reviewedAt) { var review=document.createElement('p'); review.className='mt-2 text-sm text-slate-600'; review.textContent=(v.reviewNote || '')+(v.reviewedAt ? ' · נבדקה '+architectureFormatDate(v.reviewedAt)+' על ידי '+(v.reviewedBy || '') : ''); card.appendChild(review); }
+            if(v.inputSnapshot && v.inputSnapshot.meeting) {
+                var m=v.inputSnapshot.meeting, details=document.createElement('details'); details.className='mt-3 text-sm text-slate-600';
+                var summary=document.createElement('summary'); summary.className='cursor-pointer font-semibold'; summary.textContent='הצגת פרטי הפגישה שנשמרו בגרסה'; details.appendChild(summary);
+                [['מועד',m.date],['משתתפים',m.attendees],['סיכום והערות',m.notes],['קישור לסקר',m.surveyLink],['תצוגות ליועצים',Array.isArray(m.consultantWorkViews)?m.consultantWorkViews.join(', '):'']].forEach(function(pair){if(!pair[1])return;var line=document.createElement('p');line.className='mt-1';line.textContent=pair[0]+': '+pair[1];details.appendChild(line);}); card.appendChild(details);
+            }
+            var canReview=architectureKickoffState.writable && !!v.documentUrl && (v.status==='GENERATED' || v.status==='APPROVED' || v.status==='CHANGES_REQUESTED');
+            if(canReview) {
+                var area=document.createElement('textarea'); area.id='architecture-kickoff-review-note-'+rawId; area.maxLength=2000; area.rows=2; area.placeholder='הערת בדיקה'; area.className='mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm';
+                var actions=document.createElement('div'); actions.className='mt-2 flex flex-wrap gap-2';
+                [['APPROVED','אישור הגרסה','architecture-kickoff-review-approve-'],['CHANGES_REQUESTED','נדרשים שינויים','architecture-kickoff-review-changes-']].forEach(function(pair) { var button=document.createElement('button'); button.id=pair[2]+id; button.type='button'; button.textContent=pair[1]; button.className='rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700'; button.disabled=architectureKickoffBusy; button.onclick=function(){reviewArchitectureKickoffVersion(rawId,pair[0]);}; actions.appendChild(button); });
+                card.appendChild(area); card.appendChild(actions);
+            }
+            if(host) host.appendChild(card);
+            if(library && v.documentUrl && v.status!=='GENERATION_FAILED' && v.status!=='GENERATING') {
+                var row=document.createElement('div'); row.id='project-document-version-'+id; row.className='flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3';
+                var label=document.createElement('span'); label.textContent='פגישת התנעה אדריכלית · '+architectureFormatDate(v.createdAt)+' · '+statusLabel; label.className='text-sm font-semibold text-slate-800';
+                var docLink=document.createElement('a'); docLink.id='project-document-link-'+id; docLink.dataset.documentUrl=v.documentUrl; docLink.href=v.documentUrl; docLink.target='_blank'; docLink.rel='noopener'; docLink.textContent='פתיחה ↗'; docLink.className='text-sm font-bold text-teal-700'; row.appendChild(label); row.appendChild(docLink); library.appendChild(row); libraryCount++;
+            }
+        });
+        if(library && !libraryCount) library.innerHTML='<p class="text-sm text-slate-500">אין עדיין מסמכים שנוצרו בתהליך.</p>';
+        var count=document.getElementById('home-docs-value'); if(count) count.textContent=libraryCount+' גרסאות התנעה';
+    }
+    function reviewArchitectureKickoffVersion(versionId, decision) {
+        var p=state.selectedProject; if(!p || architectureKickoffBusy) return;
+        if(!architectureKickoffState.writable) return showToast('בדיקת גרסה אינה זמינה לפרויקט זה.','error');
+        var noteEl=document.getElementById('architecture-kickoff-review-note-'+versionId), note=noteEl ? noteEl.value.trim() : '';
+        if(decision==='CHANGES_REQUESTED' && !note) return showToast('יש להוסיף הערה כשמבקשים שינויים.','error');
+        var key=architectureProjectKey(p); architectureSetBusy(true);
+        document.querySelectorAll('#architecture-kickoff-versions button, #architecture-kickoff-versions textarea').forEach(function(b){b.disabled=true;});
+        google.script.run.withSuccessHandler(function(res) {
+            if(!architectureStillOnProject(key)) return;
+            architectureSetBusy(false);
+            if(!res || !res.success) { renderArchitectureKickoffVersions(); showToast((res && res.error) || 'שמירת הבדיקה נכשלה.','error'); return; }
+            architectureAcceptState(res); renderArchitectureKickoffVersions(); showToast('החלטת הבדיקה נשמרה; שלב הפרויקט לא השתנה.','success');
+        }).withFailureHandler(function(err) { if(!architectureStillOnProject(key)) return; architectureSetBusy(false); renderArchitectureKickoffVersions(); showToast('שמירת הבדיקה נכשלה: '+(err && err.message || 'שגיאה'),'error'); }).reviewArchitectureKickoff(p.folderId,p.no,p.name,{revision:architectureKickoffState.revision,versionId:versionId,decision:decision,note:note});
+    }
+
+    // --- GENERATORS ---
+
+    // Helper to read file input as Base64 string
+    function getBase64(file) {
+        return new Promise(function(resolve, reject) {
+            var reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = function() { resolve(reader.result); };
+            reader.onerror = function(error) { reject(error); };
+        });
+    }
+
+    async function generatePresentationDoc() {
+        const proj = state.selectedProject; 
+        if(!proj || !proj.folderId) return showToast("לפרויקט שנבחר אין מזהה תיקייה.", "error");
+        
+        const requestedProjectNo = String(proj.no); 
+
+        const btn = document.getElementById("btn-gen-presdoc"); 
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<svg class="animate-spin w-3 h-3 mr-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> מסנכרן ומפיק...';
+        btn.disabled = true; 
+        btn.classList.add("opacity-75", "cursor-wait"); 
+        const successDiv = document.getElementById("pres-doc-success");
+        if(successDiv) successDiv.classList.add("hidden");
+
+        const payload = { 
+            bimInfo: state.bimInfo, kickoff: state.kickoff, liveLink: state.liveLink, sharedLink: state.sharedLink, 
+            contacts: state.contacts, basements: state.mdcBasements, lots: state.mdcLots, buildings: state.mdcBuildings, 
+            genModels: state.mdcGenModels, siteGroups: state.siteGroups, designOptions: state.designOptions, modelSchema: state.modelSchema || null,
+            disciplines: state.mdcDisciplines.filter(function(d) { return d.checked !== false; }), 
+            matrix: state.matrix, models: buildModelsArray(), notebook: state.notebook,
+            colOrder: getColOrder(), colVis: getColVis(), modelsDirty: state.modelsDirty === true
+        };
+        payload.bimInfo.projectNumber = proj.no; payload.bimInfo.projectName = proj.name; payload.bimInfo.manager = proj.manager; payload.bimInfo.coordinator = proj.coordinator;
+
+        payload.kickoff.hasPhases = getRadioValue("kick-phases");
+
+        // PROCESS IMAGE UPLOADS
+        const pmLogoFile = document.getElementById("pres-pm-logo").files[0];
+        const devLogoFile = document.getElementById("pres-dev-logo").files[0];
+        
+        if (pmLogoFile) payload.pmLogoBase64 = await getBase64(pmLogoFile);
+        if (devLogoFile) payload.devLogoBase64 = await getBase64(devLogoFile);
+
+        google.script.run.withSuccessHandler(function(syncRes) {
+            if (!state.selectedProject || String(state.selectedProject.no) !== requestedProjectNo) return; 
+
+            if(syncRes && syncRes.success) {
+                acceptSavedModelTable(payload);
+                state.sheetUrl = syncRes.url; saveLocalStateOnly(); updateDbStatusText("הסנכרון האחרון: עכשיו"); 
+                
+                google.script.run.withSuccessHandler(function(presRes) {
+                    if (!state.selectedProject || String(state.selectedProject.no) !== requestedProjectNo) return; 
+
+                    btn.innerHTML = originalText; btn.disabled = false; btn.classList.remove("opacity-75", "cursor-wait");
+                    if(presRes && presRes.success && presRes.url) {
+                        showToast("המצגת נוצרה בהצלחה!", "success"); 
+                        if (successDiv) {
+                            document.getElementById("pres-doc-link").href = presRes.url; 
+                            successDiv.classList.remove("hidden");
+                        }
+                    } else { showToast("ההפקה נכשלה: " + (presRes ? presRes.error : "שגיאה לא ידועה"), "error"); }
+                }).withFailureHandler(function(err) {
+                    if (!state.selectedProject || String(state.selectedProject.no) !== requestedProjectNo) return;
+                    btn.innerHTML = originalText; btn.disabled = false; btn.classList.remove("opacity-75", "cursor-wait"); showToast("ההפקה נכשלה: " + err.message, "error");
+                }).generatePresentationDoc(proj.folderId, proj.no, proj.name, payload);
+            } else {
+                btn.innerHTML = originalText; btn.disabled = false; btn.classList.remove("opacity-75", "cursor-wait");
+                showToast("הסנכרון נכשל, יצירת המצגת מבוטלת: " + (syncRes ? syncRes.error : "שגיאה לא ידועה"), "error");
+            }
+        }).withFailureHandler(function(err) {
+            if (!state.selectedProject || String(state.selectedProject.no) !== requestedProjectNo) return;
+            btn.innerHTML = originalText; btn.disabled = false; btn.classList.remove("opacity-75", "cursor-wait");
+            showToast("הסנכרון נכשל: " + err.message, "error");
+        }).generateMasterProjectSheet(proj.folderId, proj.no, proj.name, payload);
+    }
+
+    function pullDataFromCloud() {
+        const proj = state.selectedProject;
+        if(!proj || !proj.folderId) return;
+
+        const requestedProjectNo = String(proj.no); 
+
+        const btn = document.getElementById("btn-pull-cloud");
+        if(btn) { btn.innerHTML = 'מוריד...'; btn.disabled = true; btn.classList.add("opacity-75", "cursor-wait"); }
+
+        google.script.run.withSuccessHandler(function(res) {
+            if (!state.selectedProject || String(state.selectedProject.no) !== requestedProjectNo) return; 
+
+            if(btn) { btn.innerHTML = '<svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-3 3m0 0l-3-3m3 3V4"></path></svg> הורדה'; btn.disabled = false; btn.classList.remove("opacity-75", "cursor-wait"); }
+            try {
+                if(res && res.success && res.data && res.data.hasData) {
+                    state.bimInfo = res.data.bimInfo || state.bimInfo;
+                    state.kickoff = res.data.kickoff || state.kickoff;
+                    state.mdcLots = (res.data.lots && res.data.lots.length > 0) ? res.data.lots : state.mdcLots;
+                    state.mdcBuildings = (res.data.buildings && res.data.buildings.length > 0) ? res.data.buildings : state.mdcBuildings;
+                    state.mdcBasements = (res.data.basements && res.data.basements.length > 0) ? res.data.basements : state.mdcBasements;
+                    
+                    state.mdcGenModels = (res.data.genModels && res.data.genModels.length > 0) ? res.data.genModels : state.mdcGenModels;
+                    loadCanonicalRegisterFromSource(res.data);
+                    state.siteGroups = (res.data.siteGroups && res.data.siteGroups.length > 0) ? res.data.siteGroups : state.siteGroups;
+                    state.designOptions = (res.data.designOptions && res.data.designOptions.length > 0) ? res.data.designOptions : state.designOptions;
+                    state.modelSchema = res.data.modelSchema || state.modelSchema || null;
+
+                    state.mdcDisciplines = (res.data.disciplines && res.data.disciplines.length > 0) ? res.data.disciplines : state.mdcDisciplines;
+                    state.contacts = (res.data.contacts && res.data.contacts.length > 0) ? res.data.contacts : state.contacts;
+                    
+                    state.notebook = (res.data.notebook && res.data.notebook.length > 0) ? res.data.notebook : state.notebook;
+
+                    if (res.data.matrix) {
+                        state.matrix = {};
+                        Object.keys(res.data.matrix).forEach(function(k) { state.matrix[k] = res.data.matrix[k]; });
+                    }
+
+                    updateProjectUI();
+                    if (state.mdcCurrentStep === 4 && typeof renderFinalModelTable === 'function') renderFinalModelTable();
+                    saveLocalStateOnly();
+
+                    updateDbStatusText("הנתונים נמשכו מהענן בהצלחה.");
+                    showToast("הנתונים שוחזרו מהענן בהצלחה!", "success");
+                } else if(res && res.success && res.data && !res.data.hasData) {
+                    showToast("לא נמצאו נתונים בענן לשחזור.", "error");
+                } else {
+                    throw new Error(res ? res.error : "לא התקבלה תשובה מהשרת");
+                }
+            } catch(ex) { showToast("שגיאה בעדכון הממשק: " + ex.message, "error"); }
+        }).withFailureHandler(function(err) {
+            if (!state.selectedProject || String(state.selectedProject.no) !== requestedProjectNo) return;
+            if(btn) { btn.innerHTML = '<svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-3 3m0 0l-3-3m3 3V4"></path></svg> הורדה'; btn.disabled = false; btn.classList.remove("opacity-75", "cursor-wait"); }
+            showToast("משיכת הנתונים נכשלה: " + err.message, "error");
+        }).pullProjectDataFromSheet(state.selectedProject.folderId, state.selectedProject.no, state.selectedProject.name);
+    }
+
+    // Full project snapshot sent to generateMasterProjectSheet (manual sync, autosave, kickoff generation).
+    function buildMasterSyncPayload(proj) {
+        const payload = {
+            bimInfo: state.bimInfo, kickoff: state.kickoff, liveLink: state.liveLink, sharedLink: state.sharedLink,
+            lots: state.mdcLots, buildings: state.mdcBuildings, basements: state.mdcBasements, genModels: state.mdcGenModels, siteGroups: state.siteGroups, designOptions: state.designOptions, modelSchema: state.modelSchema || null, disciplines: state.mdcDisciplines.filter(function(d) { return d.checked !== false; }), models: buildModelsArray(), contacts: state.contacts, notebook: state.notebook,
+            colOrder: getColOrder(), colVis: getColVis(), modelsDirty: state.modelsDirty === true
+        };
+        payload.bimInfo.projectNumber = proj.no; payload.bimInfo.projectName = proj.name; payload.bimInfo.manager = proj.manager; payload.bimInfo.coordinator = proj.coordinator;
+        return payload;
+    }
+
+    function triggerManualSync() {
+        const proj = state.selectedProject; if(!proj || !proj.folderId) return;
+
+        const requestedProjectNo = String(proj.no); 
+
+        const btn = document.getElementById("btn-sync-sheet-now"); const originalText = btn.innerHTML;
+        btn.innerHTML = 'מסנכרן...'; btn.disabled = true; btn.classList.add("opacity-75", "cursor-wait");
+
+        const payload = buildMasterSyncPayload(proj);
+
+        google.script.run.withSuccessHandler(function(res) {
+            if (!state.selectedProject || String(state.selectedProject.no) !== requestedProjectNo) return; 
+            
+            btn.innerHTML = originalText; btn.disabled = false; btn.classList.remove("opacity-75", "cursor-wait");
+            if(res.success && res.url) {
+                acceptSavedModelTable(payload);
+                updateDbStatusText("הסנכרון האחרון: עכשיו"); showToast("הגיליון סונכרן בהצלחה!", "success"); state.sheetUrl = res.url; saveLocalStateOnly();
+            } else { showToast("הסנכרון נכשל: " + (res.error || "שגיאה לא ידועה"), "error"); }
+        }).withFailureHandler(function(err) {
+            if (!state.selectedProject || String(state.selectedProject.no) !== requestedProjectNo) return;
+            btn.innerHTML = originalText; btn.disabled = false; btn.classList.remove("opacity-75", "cursor-wait"); showToast("הסנכרון נכשל: " + err.message, "error");
+        }).generateMasterProjectSheet(proj.folderId, proj.no, proj.name, payload);
+    }
+
+    function syncToCloudSilent(targetProjNo) {
+       if (!state.selectedProject || String(state.selectedProject.no) !== targetProjNo) return; 
+
+       const proj = state.selectedProject; if(!proj || !proj.folderId) return;
+
+       const payload = { bimInfo: state.bimInfo, kickoff: state.kickoff, liveLink: state.liveLink, sharedLink: state.sharedLink, lots: state.mdcLots, buildings: state.mdcBuildings, basements: state.mdcBasements, genModels: state.mdcGenModels, siteGroups: state.siteGroups, designOptions: state.designOptions, modelSchema: state.modelSchema || null, disciplines: state.mdcDisciplines.filter(function(d) { return d.checked !== false; }), models: buildModelsArray(), contacts: state.contacts, notebook: state.notebook, colOrder: getColOrder(), colVis: getColVis(), modelsDirty: state.modelsDirty === true };
+       payload.bimInfo.projectNumber = proj.no; payload.bimInfo.projectName = proj.name; payload.bimInfo.manager = proj.manager; payload.bimInfo.coordinator = proj.coordinator;
+
+       google.script.run.withSuccessHandler(function(res) {
+         if (!state.selectedProject || String(state.selectedProject.no) !== targetProjNo) return; 
+
+         const statusEl = document.getElementById("cloud-save-status");
+         if(res.success && res.url) {
+             acceptSavedModelTable(payload);
+             if(statusEl) { statusEl.innerHTML = 'נשמר בענן'; statusEl.classList.remove("text-slate-500", "text-red-500"); statusEl.classList.add("text-emerald-500"); setTimeout(function() { statusEl.classList.add("opacity-0"); }, 3000); }
+             state.sheetUrl = res.url; saveLocalStateOnly(); 
+         } else {
+             if(statusEl) { statusEl.innerHTML = 'השמירה נכשלה'; statusEl.classList.remove("text-slate-500", "text-emerald-500"); statusEl.classList.add("text-red-500"); }
+         }
+       }).withFailureHandler(function(err) {
+         if (!state.selectedProject || String(state.selectedProject.no) !== targetProjNo) return;
+         const statusEl = document.getElementById("cloud-save-status"); if(statusEl) { statusEl.innerHTML = 'השמירה נכשלה'; statusEl.classList.remove("text-slate-500", "text-emerald-500"); statusEl.classList.add("text-red-500"); }
+       }).generateMasterProjectSheet(proj.folderId, proj.no, proj.name, payload);
+    }
+
+    function updateDbStatusText(msg) { const el = document.getElementById("db-last-sync-text"); if(el) el.innerText = msg; }
+    function openSheetOnly() { if (state.sheetUrl) { window.open(state.sheetUrl, '_blank'); } else { showToast("הקישור עדיין לא מוכן, אנא המתן או לחץ על סנכרון.", "error"); } }
+</script>

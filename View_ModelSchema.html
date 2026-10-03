@@ -1,0 +1,97 @@
+<!-- MDC step 5: סכמת מודל (3D spatial schema). Logic: Script_ModelSchema.html -->
+<div id="mdc-step-body-5" class="hidden w-full" dir="rtl">
+    <div id="ms-root" class="relative w-full h-[72vh] min-h-[520px] rounded-2xl border border-slate-200 bg-slate-50 overflow-hidden select-none text-slate-800">
+
+        <div id="ms-canvas" class="absolute inset-0"></div>
+        <div id="ms-labels" class="absolute inset-0 pointer-events-none z-10 overflow-hidden"></div>
+
+        <!-- Loading / empty / error state -->
+        <div id="ms-overlay" class="absolute inset-0 z-40 flex items-center justify-center bg-slate-50/90">
+            <div class="text-center space-y-2 px-6">
+                <div id="ms-overlay-spinner" class="mx-auto w-8 h-8 rounded-full border-2 border-blue-600 border-t-transparent animate-spin"></div>
+                <p id="ms-overlay-text" class="text-sm font-semibold text-slate-600">טוען מנוע תלת-ממד...</p>
+            </div>
+        </div>
+
+        <!-- Header: title, exploded view, options, actions -->
+        <div class="absolute top-3 right-3 left-3 pointer-events-none flex flex-wrap justify-between items-start gap-3 z-20">
+            <div class="bg-white/85 backdrop-blur-xl border border-white p-3 rounded-2xl shadow-lg pointer-events-auto flex items-center gap-3">
+                <span class="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+                <div>
+                    <h3 class="text-sm font-extrabold text-slate-900 tracking-tight">סכמת מודל <span id="ms-project-name" class="font-semibold text-slate-500"></span></h3>
+                    <p id="ms-subtitle" class="text-[11px] text-slate-500 font-medium">מגרשים, מבנים, מרתפים, אתרים וחלופות</p>
+                </div>
+            </div>
+            <div class="flex flex-wrap items-start gap-2 pointer-events-auto">
+                <div class="bg-white/85 backdrop-blur-xl border border-white p-3 rounded-2xl shadow-lg w-56 space-y-1.5">
+                    <div class="flex justify-between items-center text-xs font-bold text-slate-700">
+                        <span>פירוק אנכי</span>
+                        <span id="ms-explode-text" class="text-blue-600 font-mono">0%</span>
+                    </div>
+                    <input type="range" dir="ltr" id="ms-explode" min="0" max="100" value="0" class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="absolute top-[5.5rem] left-3 z-20 bg-white/85 backdrop-blur-xl border border-white p-1.5 rounded-2xl shadow-lg flex flex-wrap items-center gap-1 text-xs font-bold pointer-events-auto">
+                    <button type="button" id="ms-btn-undo" class="px-3 py-1.5 rounded-xl text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed" title="ביטול פעולה אחרונה (Ctrl+Z)">↶ בטל</button>
+                    <button type="button" id="ms-btn-fit" class="px-3 py-1.5 rounded-xl text-slate-600 hover:bg-slate-100" title="התאמת התצוגה לכל הפרויקט">⤢ התאם תצוגה</button>
+                    <button type="button" id="ms-btn-png" class="px-3 py-1.5 rounded-xl text-blue-700 hover:bg-blue-50" title="הורדת תמונת PNG ושמירה בתיקיית BEP של הפרויקט">⬇ PNG</button>
+                    <button type="button" id="ms-btn-reset" class="px-3 py-1.5 rounded-xl text-slate-600 hover:bg-slate-100" title="סידור אוטומטי מחדש של כל המיקומים והגדלים">↺ סידור אוטומטי</button>
+                    <label class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-600 hover:bg-slate-100 cursor-pointer" title="כל המבנים שקופים, כדי לראות מבנים מוסתרים">
+                        <input type="checkbox" id="ms-toggle-xray" class="w-3.5 h-3.5 accent-slate-700"> שקיפות
+                    </label>
+                    <label class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-600 hover:bg-slate-100 cursor-pointer">
+                        <input type="checkbox" id="ms-toggle-options" checked class="w-3.5 h-3.5 accent-purple-600"> הצג חלופות
+                    </label>
+                </div>
+
+        <!-- Zoom -->
+        <div class="absolute top-[8.75rem] left-3 z-20 flex flex-col overflow-hidden rounded-xl border border-white bg-white/90 shadow-lg backdrop-blur-xl pointer-events-auto text-lg font-bold text-slate-700">
+            <button type="button" id="ms-zoom-in" class="w-9 h-9 hover:bg-slate-100" title="התקרבות" aria-label="התקרבות">+</button>
+            <button type="button" id="ms-zoom-out" class="w-9 h-9 border-t border-slate-200 hover:bg-slate-100" title="התרחקות" aria-label="התרחקות">&minus;</button>
+        </div>
+
+        <!-- Right panel: decomposition tree + properties -->
+        <div class="absolute top-24 right-3 w-72 max-h-[calc(100%-7.5rem)] overflow-y-auto bg-white/90 backdrop-blur-xl border border-white rounded-2xl p-3 shadow-xl pointer-events-auto space-y-3 z-20">
+            <div class="border-b border-slate-100 pb-2">
+                <h4 class="text-xs font-extrabold text-slate-800">עץ דה-קומפוזיציה</h4>
+                <p class="text-[10px] text-slate-400">לחיצה על פריט בוחרת אותו בתלת-ממד</p>
+            </div>
+            <div id="ms-tree" class="space-y-2"></div>
+            <div id="ms-props" class="hidden border-t border-slate-200 pt-3 space-y-2.5">
+                <h4 id="ms-props-title" class="text-xs font-extrabold text-slate-900"></h4>
+                <div id="ms-props-content" class="space-y-2 text-xs"></div>
+            </div>
+        </div>
+
+        <!-- Selection toolbar -->
+        <div id="ms-toolbar" class="hidden absolute bottom-3 left-3 max-w-[calc(100%-20rem)] bg-white/95 backdrop-blur-xl border border-white px-4 py-2.5 rounded-3xl shadow-2xl pointer-events-auto flex flex-wrap items-center gap-4 z-30">
+            <div class="flex items-center gap-2 border-l border-slate-200 pl-4">
+                <span id="ms-toolbar-dot" class="w-3.5 h-3.5 rounded-full shadow-sm"></span>
+                <div>
+                    <div id="ms-toolbar-title" class="text-xs font-extrabold text-slate-900"></div>
+                    <div id="ms-toolbar-sub" class="text-[10px] text-blue-600 font-bold"></div>
+                </div>
+            </div>
+            <div class="flex bg-slate-100 p-1 rounded-2xl border border-slate-200 text-xs font-bold gap-1">
+                <button type="button" id="ms-mode-pushpull" class="px-3 py-1.5 rounded-xl">↔ מתיחת פאה</button>
+                <button type="button" id="ms-mode-move" class="px-3 py-1.5 rounded-xl">✥ הזזה</button>
+            </div>
+            <div class="relative">
+                <button type="button" id="ms-color-btn" class="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-600 hover:bg-slate-50" title="בחירת צבע" aria-haspopup="true">
+                    <span id="ms-color-current" class="w-4 h-4 rounded-full border border-white shadow"></span> צבע ▾
+                </button>
+                <div id="ms-palette" class="hidden absolute bottom-full mb-2 left-0 z-40 grid grid-cols-6 gap-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl w-max"></div>
+            </div>
+            <button type="button" id="ms-btn-deselect" class="text-xs font-bold text-slate-400 hover:text-slate-700 px-1">סגור</button>
+        </div>
+
+        <div id="ms-note" class="hidden absolute bottom-4 right-3 z-30 bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded-xl shadow-lg"></div>
+    </div>
+    <p class="mt-2 text-[11px] text-slate-500">
+        המיקומים, הגדלים והצבעים נשמרים בגיליון הפרויקט (לשונית Model_Schema). מספר הקומות משותף עם שלב 1 (מבנה פיזי).
+        מתיחת פאת מגרש אינה מזיזה את המבנים שעליו; מרתף נשאר בתוך המגרשים שלו.
+    </p>
+</div>

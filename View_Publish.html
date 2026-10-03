@@ -1,0 +1,38 @@
+<section id="tab-content-publish" class="tab-pane hidden mx-auto max-w-[1600px] space-y-5 p-4 md:p-6" dir="rtl" aria-labelledby="publish-title">
+  <header class="publish-header">
+    <div>
+      <p class="publish-eyebrow">תצוגות ענן</p>
+      <h2 id="publish-title">בקרת Publish</h2>
+      <p class="publish-lead">בדיקת תצוגות שפורסמו בענן לפי תחום, מודל וסוג תצוגה.</p>
+      <p class="publish-cadence">מחזור בדיקה: שבועי · יום הבדיקה טרם נקבע</p>
+    </div>
+    <div id="publish-snapshot-meta" class="publish-meta" aria-live="polite"></div>
+  </header>
+
+  <section class="publish-requirements" aria-labelledby="publish-requirements-title">
+    <div class="publish-requirements-heading">
+      <span class="publish-info-mark" aria-hidden="true">i</span>
+      <div><h3 id="publish-requirements-title">תכולת פרסום נדרשת</h3><p>הנחיות לפרסום. הן אינן אישור שהתצוגות קיימות.</p></div>
+    </div>
+    <ul>
+      <li><strong>כל תחום:</strong> תצוגת תלת־ממד לתחום בלבד</li>
+      <li><strong>כל הקישורים:</strong> תצוגת תלת־ממד משולבת</li>
+      <li><strong>אדריכלות וקונסטרוקציה:</strong> תצוגת תלת־ממד משולבת</li>
+      <li><strong>תכניות:</strong> תצוגת דו־ממד לכל קומה טיפוסית</li>
+      <li><strong>גיליונות:</strong> לפרסם כאשר הם מסודרים</li>
+    </ul>
+  </section>
+
+  <div id="publish-content" class="publish-content" aria-live="polite">
+    <div class="publish-empty"><span class="publish-empty-icon" aria-hidden="true">◇</span><p>נתוני תצוגות הענן עדיין לא נטענו.</p></div>
+  </div>
+
+  <div id="publish-preview-modal" class="publish-modal" hidden>
+    <div class="publish-modal-backdrop" data-publish-close></div>
+    <section class="publish-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="publish-preview-title" tabindex="-1">
+      <header><div><p class="publish-eyebrow">תצוגה מקדימה</p><h2 id="publish-preview-title"></h2></div><button type="button" class="publish-close" data-publish-close aria-label="סגירה">×</button></header>
+      <div id="publish-preview-body" class="publish-preview-body"></div>
+      <footer id="publish-preview-footer"></footer>
+    </section>
+  </div>
+</section>

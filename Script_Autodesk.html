@@ -1,0 +1,315 @@
+<script>
+    // Autodesk (BIM 360 / ACC) hub + project connection for "קישורים לסביבת העבודה".
+    // Server: 12_AutodeskService.js. Stored in state.bimInfo.accHubId/accHubName/accProjectId/accProjectName.
+    var apsPicker = { hubs: null, projects: [], hubId: '', loadSeq: 0 };
+    var apsAuto = { tried: {}, running: '', matches: {}, note: {} }; // per project number
+    var APS_PROJECT_ID_RE = /projects\/(?:b\.)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+
+    function apsEsc(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function(c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; });
+    }
+
+    // google.script.run with a timeout, so the UI never waits forever.
+    // The first call after 6h builds the hub/project index (a few seconds); later calls are cached.
+    function apsCall(fnName, args, onOk, onErr, timeoutMs) {
+        var done = false;
+        var timer = setTimeout(function() {
+            if (done) return; done = true;
+            onErr(new Error('Autodesk לא הגיב תוך ' + Math.round((timeoutMs || 90000) / 1000) + ' שניות. נסה שוב או הרץ diagnoseAutodesk בעורך.'));
+        }, timeoutMs || 90000);
+        function finish(fn, value) { if (done) return; done = true; clearTimeout(timer); fn(value); }
+        try {
+            var runner = google.script.run
+                .withSuccessHandler(function(res) { finish(onOk, res); })
+                .withFailureHandler(function(err) { finish(onErr, err); });
+            if (typeof runner[fnName] !== 'function') {
+                throw new Error('הפונקציה ' + fnName + ' לא קיימת בגרסה הפרוסה. בעורך: Deploy → Manage deployments → עריכה → Version: New version.');
+            }
+            runner[fnName].apply(runner, args || []);
+        } catch (e) { finish(onErr, e); }
+    }
+
+    function apsLinkedProjectIdFromInput() {
+        var input = document.getElementById('info-acc-link');
+        var m = input ? APS_PROJECT_ID_RE.exec(input.value || '') : null;
+        return m ? 'b.' + m[1].toLowerCase() : '';
+    }
+
+    function apsRenderLinkStatus() {
+        var text = document.getElementById('aps-link-text'), dot = document.getElementById('aps-link-dot');
+        if (!text || !dot) return;
+        var info = (state && state.bimInfo) || {};
+        var no = state && state.selectedProject ? String(state.selectedProject.no) : '';
+        var linkedId = apsLinkedProjectIdFromInput();
+        var status, color;
+        if (info.accProjectId && linkedId && linkedId !== String(info.accProjectId).toLowerCase()) {
+            status = 'הקישור שונה מהפרויקט המקושר (' + (info.accProjectName || info.accProjectId) + '). לחץ "זיהוי אוטומטי" לעדכון.';
+            color = 'bg-amber-400';
+        } else if (info.accProjectId) {
+            status = 'מקושר: ' + (info.accHubName || 'HUB') + ' › ' + (info.accProjectName || info.accProjectId);
+            color = 'bg-emerald-500';
+        } else if (apsAuto.running && apsAuto.running === no) {
+            status = 'מחפש את הפרויקט ב-Autodesk...';
+            color = 'bg-blue-500 animate-pulse';
+        } else if (linkedId) {
+            status = 'יש קישור Autodesk אך ה-HUB לא זוהה. לחץ "זיהוי אוטומטי".';
+            color = 'bg-amber-400';
+        } else if (apsAuto.note[no]) {
+            status = apsAuto.note[no];
+            color = (apsAuto.matches[no] || []).length ? 'bg-amber-400' : 'bg-slate-300';
+        } else {
+            status = 'לא מקושר לפרויקט Autodesk';
+            color = 'bg-slate-300';
+        }
+        text.textContent = status;
+        text.title = status;
+        dot.className = 'w-2 h-2 rounded-full shrink-0 ' + color;
+        apsMaybeAutoMatch();
+    }
+
+    // Writes the chosen hub/project into the existing form fields, then the normal autosave runs.
+    function apsApplySelection(hub, project, keepPastedLink, how) {
+        if (!state.selectedProject) return;
+        state.bimInfo = state.bimInfo || {};
+        state.bimInfo.accHubId = hub.id;
+        state.bimInfo.accHubName = hub.name;
+        state.bimInfo.accProjectId = project.id;
+        state.bimInfo.accProjectName = project.name;
+
+        var link = document.getElementById('info-acc-link');
+        if (link && (!keepPastedLink || !link.value.trim())) link.value = project.url;
+
+        var hubCb = document.getElementById('info-hub-checkbox'), hubInput = document.getElementById('info-hub-link');
+        if (hubCb && hubInput) {
+            var isAmec = /^amec$/i.test(String(hub.name).trim());
+            hubCb.checked = isAmec;
+            hubInput.value = isAmec ? '' : hub.name;
+            hubInput.disabled = isAmec;
+        }
+
+        var platform = document.getElementById('info-cde-platform');
+        if (platform) {
+            var re = project.type === 'ACC' ? /\bacc\b|forma/i : /bim\s*-?\s*360/i;
+            for (var i = 0; i < platform.options.length; i++) {
+                if (re.test(platform.options[i].text) || re.test(platform.options[i].value)) { platform.value = platform.options[i].value; break; }
+            }
+        }
+
+        if (typeof updateLinkButtons === 'function') updateLinkButtons();
+        saveLocalState();
+        apsRenderLinkStatus();
+        showToast((how === 'auto' ? 'קושר אוטומטית ל-' : 'מקושר ל-') + hub.name + ' › ' + project.name, 'success');
+    }
+
+    // Runs once per project per session, after the project's sheet data has loaded,
+    // only when nothing is linked yet and the CDE field is empty.
+    function apsMaybeAutoMatch() {
+        if (!state || !state.selectedProject) return;
+        var no = String(state.selectedProject.no);
+        if (apsAuto.tried[no] || apsAuto.running || state.sheetLoadedFor !== no) return;
+        if (state.bimInfo && state.bimInfo.accProjectId) return;
+        var link = document.getElementById('info-acc-link');
+        if (link && link.value.trim()) return;
+        apsAuto.tried[no] = true;
+        apsRunAutoMatch(false);
+    }
+
+    function apsRunAutoMatch(openPickerIfMany) {
+        var no = String(state.selectedProject.no);
+        apsAuto.running = no;
+        apsRenderLinkStatus();
+        apsCall('apsAutoMatchProject', [no], function(res) {
+            apsAuto.running = '';
+            var stillHere = state.selectedProject && String(state.selectedProject.no) === no;
+            if (!res || !res.success) {
+                apsAuto.note[no] = 'החיפוש ב-Autodesk נכשל: ' + ((res && res.error) || 'שגיאה');
+                if (stillHere) { apsRenderLinkStatus(); if (openPickerIfMany) showToast(apsAuto.note[no], 'error'); }
+                return;
+            }
+            if (!res.configured) {
+                apsAuto.note[no] = res.canConfigure
+                    ? 'החיבור ל-Autodesk טרם הוגדר. לחץ "בחירה מ-Autodesk" להזנת פרטי האפליקציה.'
+                    : 'החיבור ל-Autodesk טרם הוגדר. פנה למנהל המערכת.';
+                if (stillHere) apsRenderLinkStatus();
+                return;
+            }
+            apsAuto.matches[no] = res.matches || [];
+            if (!stillHere) return;
+            var linkEmpty = !apsLinkedProjectIdFromInput();
+            // Suggestions require explicit selection; never write a guessed ACC mapping.
+            apsAuto.note[no] = res.matches.length ? 'נמצאו ' + res.matches.length + ' התאמות אפשריות ב-Autodesk. לחץ "בחירה מ-Autodesk".' : 'לא נמצא ב-Autodesk פרויקט עם הקוד/מספר של הפרויקט.';
+            apsRenderLinkStatus();
+            if (openPickerIfMany) {
+                if (res.matches.length) openApsPicker(); else showToast(apsAuto.note[no], 'error');
+            }
+        }, function(err) {
+            apsAuto.running = '';
+            apsAuto.note[no] = 'החיפוש ב-Autodesk נכשל: ' + err.message;
+            if (state.selectedProject && String(state.selectedProject.no) === no) {
+                apsRenderLinkStatus();
+                if (openPickerIfMany) showToast(apsAuto.note[no], 'error');
+            }
+        }, 120000);
+    }
+
+    // Button: resolve a pasted link, or search automatically when there is no link.
+    function apsResolvePastedLink() {
+        if (!state.selectedProject) return showToast('בחר פרויקט קודם.', 'error');
+        var input = document.getElementById('info-acc-link');
+        var url = input ? input.value.trim() : '';
+        if (!url || !APS_PROJECT_ID_RE.test(url)) { apsRunAutoMatch(true); return; }
+        var btn = document.getElementById('btn-aps-resolve'), original = btn ? btn.textContent : '';
+        var projectNo = String(state.selectedProject.no);
+        if (btn) { btn.disabled = true; btn.textContent = 'מזהה...'; }
+        apsCall('apsResolveProjectLink', [url], function(res) {
+            if (btn) { btn.disabled = false; btn.textContent = original; }
+            if (!state.selectedProject || String(state.selectedProject.no) !== projectNo) return;
+            if (!res || !res.success) return showToast((res && res.error) || 'הזיהוי נכשל.', 'error');
+            apsApplySelection(res.hub, res.project, true);
+        }, function(err) {
+            if (btn) { btn.disabled = false; btn.textContent = original; }
+            showToast('הזיהוי נכשל: ' + err.message, 'error');
+        }, 120000);
+    }
+
+    function apsSetPickerMessage(message, isError) {
+        var box = document.getElementById('aps-picker-message');
+        if (!box) return;
+        box.textContent = message || '';
+        box.className = message ? 'px-5 py-3 text-sm ' + (isError ? 'text-red-600 bg-red-50' : 'text-slate-500') : 'hidden';
+    }
+
+    function openApsPicker() {
+        if (!state.selectedProject) return showToast('בחר פרויקט קודם.', 'error');
+        document.getElementById('aps-picker').classList.remove('hidden');
+        var search = document.getElementById('aps-project-search');
+        // Pre-filter by the project code (e.g. LGOL) - ACC project names usually start with it.
+        var code = (state.bimInfo && state.bimInfo.code) || state.selectedProject.projectCode || '';
+        search.value = code && code !== '—' ? code : '';
+        apsLoadHubs(false);
+    }
+
+    function closeApsPicker() { document.getElementById('aps-picker').classList.add('hidden'); apsShowSetup(false); }
+
+    function apsShowSetup(show) {
+        var box = document.getElementById('aps-setup');
+        if (!box) return;
+        box.classList.toggle('hidden', !show);
+        document.getElementById('aps-client-secret').value = '';
+        document.getElementById('aps-setup-result').textContent = '';
+        if (show) document.getElementById('aps-client-id').focus();
+    }
+
+    function apsToggleSetup() { apsShowSetup(document.getElementById('aps-setup').classList.contains('hidden')); }
+
+    // Credentials go straight to the server, which tests them against Autodesk before saving.
+    function apsSaveSetup() {
+        var idEl = document.getElementById('aps-client-id'), secretEl = document.getElementById('aps-client-secret');
+        var result = document.getElementById('aps-setup-result'), btn = document.getElementById('btn-aps-save-cred');
+        if (!idEl.value.trim() || !secretEl.value.trim()) { result.className = 'text-xs text-red-600'; result.textContent = 'יש להזין Client ID ו-Client Secret.'; return; }
+        btn.disabled = true; btn.textContent = 'בודק מול Autodesk...';
+        result.className = 'text-xs text-slate-500'; result.textContent = '';
+        apsCall('apsSaveCredentials', [idEl.value.trim(), secretEl.value.trim()], function(res) {
+            btn.disabled = false; btn.textContent = 'בדיקה ושמירה';
+            secretEl.value = '';
+            if (!res || !res.success) { result.className = 'text-xs text-red-600'; result.textContent = (res && res.error) || 'השמירה נכשלה.'; return; }
+            result.className = 'text-xs text-emerald-700 font-semibold';
+            result.textContent = res.hubs.length ? 'נשמר ✓ HUBs זמינים: ' + res.hubs.join(', ') : 'נשמר ✓ אך אין HUBs זמינים — הוסף את ה-Client ID כ-Custom Integration ב-ACC.';
+            apsAuto.tried = {}; apsAuto.note = {}; apsAuto.matches = {};
+            apsPicker.hubs = null;
+            if (res.hubs.length) setTimeout(function() { apsShowSetup(false); apsLoadHubs(true); }, 1200);
+        }, function(err) {
+            btn.disabled = false; btn.textContent = 'בדיקה ושמירה';
+            secretEl.value = '';
+            result.className = 'text-xs text-red-600'; result.textContent = 'השמירה נכשלה: ' + err.message;
+        }, 60000);
+    }
+
+    function apsRefreshPicker() { apsPicker.hubs = null; apsLoadHubs(true); }
+
+    function apsLoadHubs(refresh) {
+        var select = document.getElementById('aps-hub-select');
+        if (apsPicker.hubs && !refresh) { apsLoadProjects(false); return; }
+        select.innerHTML = '<option value="">טוען HUBs...</option>';
+        document.getElementById('aps-project-list').innerHTML = '';
+        apsSetPickerMessage(refresh ? 'בונה מחדש את רשימת ה-HUBs והפרויקטים מ-Autodesk...' : 'טוען HUBs מ-Autodesk...', false);
+        apsCall('apsListHubs', [refresh === true], function(res) {
+            if (res && res.notConfigured) {
+                select.innerHTML = '';
+                if (res.canConfigure) { apsSetPickerMessage('', false); apsShowSetup(true); }
+                else apsSetPickerMessage('החיבור ל-Autodesk טרם הוגדר. פנה למנהל המערכת כדי להזין את פרטי אפליקציית ה-APS.', true);
+                return;
+            }
+            if (!res || !res.success) { select.innerHTML = ''; return apsSetPickerMessage((res && res.error) || 'טעינת HUBs נכשלה.', true); }
+            apsPicker.hubs = res.hubs;
+            if (!res.hubs.length) { select.innerHTML = ''; return apsSetPickerMessage('אין HUBs זמינים. יש להוסיף את אפליקציית ה-APS כ-Custom Integration בחשבון ה-ACC.', true); }
+            var no = state.selectedProject ? String(state.selectedProject.no) : '';
+            var suggested = (apsAuto.matches[no] || [])[0];
+            var preferred = (state.bimInfo && state.bimInfo.accHubId) || (suggested && suggested.hub.id) || '';
+            if (!preferred) res.hubs.forEach(function(h) { if (/^amec$/i.test(h.name)) preferred = h.id; });
+            select.innerHTML = res.hubs.map(function(h) {
+                return '<option value="' + apsEsc(h.id) + '"' + (h.id === preferred ? ' selected' : '') + '>' + apsEsc(h.name) + (h.region ? ' (' + apsEsc(h.region) + ')' : '') + (h.error ? ' ⚠' : '') + '</option>';
+            }).join('');
+            apsLoadProjects(false);
+        }, function(err) { select.innerHTML = ''; apsSetPickerMessage('טעינת HUBs נכשלה: ' + err.message, true); }, 120000);
+    }
+
+    function apsLoadProjects(refresh) {
+        var hubId = document.getElementById('aps-hub-select').value;
+        if (!hubId) return;
+        var seq = ++apsPicker.loadSeq;
+        apsPicker.hubId = hubId;
+        apsPicker.projects = [];
+        document.getElementById('aps-project-list').innerHTML = '';
+        apsSetPickerMessage('טוען פרויקטים...', false);
+        apsCall('apsListProjects', [hubId, refresh === true], function(res) {
+            if (seq !== apsPicker.loadSeq) return;
+            if (!res || !res.success) return apsSetPickerMessage((res && res.error) || 'טעינת הפרויקטים נכשלה.', true);
+            apsPicker.projects = res.projects;
+            apsSetPickerMessage('', false);
+            apsRenderProjects();
+        }, function(err) {
+            if (seq === apsPicker.loadSeq) apsSetPickerMessage('טעינת הפרויקטים נכשלה: ' + err.message, true);
+        }, 120000);
+    }
+
+    function apsRenderProjects() {
+        var list = document.getElementById('aps-project-list');
+        if (!list) return;
+        var q = document.getElementById('aps-project-search').value.trim().toLowerCase();
+        var p = state.selectedProject || {};
+        var hints = [String(p.no || ''), String(p.projectCode || ''), String(p.name || '')].map(function(s) { return s.toLowerCase().trim(); }).filter(function(s) { return s && s !== '—'; });
+        var linkedId = state.bimInfo && state.bimInfo.accProjectId;
+        var rows = apsPicker.projects.filter(function(pr) { return !q || pr.name.toLowerCase().indexOf(q) >= 0 || pr.id.toLowerCase().indexOf(q) >= 0; });
+        // Likely matches (project number / code / name) first.
+        rows.sort(function(a, b) {
+            var sa = hints.some(function(h) { return a.name.toLowerCase().indexOf(h) >= 0; }) ? 0 : 1;
+            var sb = hints.some(function(h) { return b.name.toLowerCase().indexOf(h) >= 0; }) ? 0 : 1;
+            return sa - sb || a.name.localeCompare(b.name);
+        });
+        if (!rows.length) {
+            list.innerHTML = '<p class="text-center text-sm text-slate-400 py-8">' + (apsPicker.projects.length ? 'אין פרויקטים תואמים לחיפוש. נקה את החיפוש או בחר HUB אחר.' : 'אין פרויקטים ב-HUB הזה.') + '</p>';
+            return;
+        }
+        list.innerHTML = rows.slice(0, 300).map(function(pr) {
+            var isLinked = linkedId && pr.id === linkedId;
+            return '<button type="button" data-aps-project="' + apsEsc(pr.id) + '" class="w-full flex items-center justify-between gap-3 text-right px-3 py-2.5 rounded-lg hover:bg-blue-50 transition ' + (isLinked ? 'bg-emerald-50' : '') + '">' +
+                '<span class="text-sm font-semibold text-slate-800 truncate">' + apsEsc(pr.name) + (isLinked ? ' <span class="text-emerald-600 text-xs">(מקושר)</span>' : '') + '</span>' +
+                '<span class="text-[10px] font-bold px-2 py-0.5 rounded shrink-0 ' + (pr.type === 'ACC' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600') + '">' + apsEsc(pr.type === 'BIM360' ? 'BIM 360' : (pr.type || '?')) + '</span>' +
+                '</button>';
+        }).join('') + (rows.length > 300 ? '<p class="text-center text-xs text-slate-400 py-2">מוצגים 300 מתוך ' + rows.length + '. צמצם את החיפוש.</p>' : '');
+        list.querySelectorAll('[data-aps-project]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var id = btn.getAttribute('data-aps-project');
+                var project = apsPicker.projects.filter(function(pr) { return pr.id === id; })[0];
+                var hub = (apsPicker.hubs || []).filter(function(h) { return h.id === apsPicker.hubId; })[0];
+                if (project && hub) { apsApplySelection(hub, project, false); closeApsPicker(); }
+            });
+        });
+    }
+
+    document.addEventListener('keydown', function(e) {
+        var picker = document.getElementById('aps-picker');
+        if (e.key === 'Escape' && picker && !picker.classList.contains('hidden')) closeApsPicker();
+    });
+</script>

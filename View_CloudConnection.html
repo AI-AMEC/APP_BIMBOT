@@ -1,0 +1,32 @@
+<section id="cloud-connection-strip" dir="rtl" class="mb-4 rounded-xl border border-slate-200 bg-white shadow-sm">
+  <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+    <div class="min-w-[220px] flex-1">
+      <div class="flex items-center gap-2">
+        <span id="cc-status-dot" class="h-2.5 w-2.5 rounded-full bg-slate-300"></span>
+        <h3 class="text-sm font-bold text-slate-800">חיבור Autodesk אישי</h3>
+        <span id="cc-status" class="text-xs text-slate-500">לחץ לרענון מצב החיבור.</span>
+      </div>
+      <p id="cc-message" aria-live="polite" class="mt-1 text-xs text-slate-500"></p>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <button id="cc-connect" type="button" onclick="ccConnect()" class="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700">התחברות ל-Autodesk</button>
+      <button id="cc-refresh" type="button" onclick="ccRefreshStatus()" class="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">רענון מצב</button>
+      <button id="cc-disconnect" type="button" onclick="ccDisconnect()" class="hidden rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50">ניתוק</button>
+      <button id="cc-toggle-binding" type="button" onclick="ccToggleBinding()" class="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">בחירת פרויקט ACC</button>
+    </div>
+  </div>
+  <div id="cc-binding" class="hidden border-t border-slate-100 px-4 py-3">
+    <p class="mb-2 text-xs text-slate-500">בחר HUB ופרויקט ACC לשיוך לפרויקט BIMBOT הנוכחי. השיוך נשמר כהעדפה אישית ואינו משנה גיליונות או נתוני פרויקט.</p>
+    <div class="flex flex-wrap items-end gap-2">
+      <label class="min-w-[180px] flex-1 text-xs font-semibold text-slate-600">HUB
+        <select id="cc-hub" onchange="ccLoadProjects(false)" class="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-sm"><option value="">טען HUBs</option></select>
+      </label>
+      <label class="min-w-[220px] flex-[2] text-xs font-semibold text-slate-600">פרויקט
+        <select id="cc-project" class="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-sm"><option value="">בחר HUB תחילה</option></select>
+      </label>
+      <button id="cc-bind" type="button" onclick="ccSaveBinding()" class="rounded-lg bg-slate-800 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-900">חיבור הפרויקט הנבחר</button>
+      <button type="button" onclick="ccRefreshHubs()" class="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">רענון HUBs</button>
+    </div>
+    <p id="cc-binding-message" aria-live="polite" class="mt-2 text-xs text-slate-500"></p>
+  </div>
+</section>

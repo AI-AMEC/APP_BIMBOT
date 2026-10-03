@@ -1,0 +1,141 @@
+<script>
+  function renderContactsTableLocal() {
+    const body = document.getElementById('tbl-contacts');
+    if (!body) return;
+    const rows = Array.isArray(state.contacts) ? state.contacts : [];
+    body.replaceChildren();
+
+    if (rows.length === 0) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5;
+      td.className = 'p-6 text-center text-slate-400';
+      td.textContent = 'עדיין לא נוספו אנשי קשר.';
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+
+    rows.forEach((contact, index) => {
+      const tr = document.createElement('tr');
+      [contact.name, contact.discipline, contact.company, contact.email].forEach(value => {
+        const td = document.createElement('td');
+        td.className = 'p-2.5 text-slate-700';
+        td.textContent = value == null ? '' : String(value);
+        tr.appendChild(td);
+      });
+
+      const actions = document.createElement('td');
+      actions.className = 'p-2.5 text-center whitespace-nowrap';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'text-blue-700 hover:underline font-semibold mr-3';
+      edit.textContent = 'עריכה';
+      edit.addEventListener('click', () => openEditContactModal(index));
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'text-red-700 hover:underline font-semibold';
+      remove.textContent = 'הסרה';
+      remove.addEventListener('click', () => removeContactLocal(index));
+      actions.append(edit, remove);
+      tr.appendChild(actions);
+      body.appendChild(tr);
+    });
+  }
+
+  function openAddContactModal() {
+    openContactEditorLocal(-1);
+  }
+
+  function openEditContactModal(index) {
+    openContactEditorLocal(index);
+  }
+
+  function openContactEditorLocal(index) {
+    const contacts = Array.isArray(state.contacts) ? state.contacts : (state.contacts = []);
+    const editing = index >= 0 && index < contacts.length;
+    const current = editing ? contacts[index] : {};
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4';
+    overlay.setAttribute('role', 'presentation');
+    const dialog = document.createElement('section');
+    dialog.className = 'w-full max-w-lg rounded-xl bg-white p-5 shadow-xl';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'contact-editor-title');
+    const title = document.createElement('h2');
+    title.id = 'contact-editor-title';
+    title.className = 'mb-4 text-lg font-bold text-slate-900';
+    title.textContent = editing ? 'עריכת איש קשר' : 'הוספת איש קשר';
+    const form = document.createElement('form');
+    form.className = 'space-y-3';
+    const inputs = {};
+
+    [
+      ['name', 'Name', true],
+      ['email', 'Email', false],
+      ['discipline', 'Discipline', false],
+      ['role', 'Role', false],
+      ['company', 'Company', false]
+    ].forEach(([key, labelText, required]) => {
+      const label = document.createElement('label');
+      label.className = 'block text-sm font-semibold text-slate-700';
+      label.textContent = labelText;
+      const input = document.createElement('input');
+      input.type = key === 'email' ? 'email' : 'text';
+      input.name = key;
+      input.value = current[key] == null ? '' : String(current[key]);
+      input.required = required;
+      input.className = 'mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500';
+      label.appendChild(input);
+      form.appendChild(label);
+      inputs[key] = input;
+    });
+
+    const buttons = document.createElement('div');
+    buttons.className = 'flex justify-end gap-2 border-t border-slate-100 pt-4';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700';
+    cancel.textContent = 'ביטול';
+    cancel.addEventListener('click', () => overlay.remove());
+    const save = document.createElement('button');
+    save.type = 'submit';
+    save.className = 'rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white';
+    save.textContent = editing ? 'שמירת איש קשר' : 'הוספת איש קשר';
+    buttons.append(cancel, save);
+    form.appendChild(buttons);
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const contact = {};
+      ['name', 'email', 'discipline', 'role', 'company'].forEach(key => { contact[key] = inputs[key].value.trim(); });
+      if (!contact.name) {
+        if (typeof showToast === 'function') showToast('יש להזין שם איש קשר.', 'error');
+        inputs.name.focus();
+        return;
+      }
+      if (editing) contacts[index] = contact;
+      else contacts.push(contact);
+      overlay.remove();
+      renderContactsTableLocal();
+      saveLocalState();
+      if (typeof showToast === 'function') showToast(editing ? 'פרטי איש הקשר עודכנו.' : 'איש הקשר נוסף.', 'success');
+    });
+
+    dialog.append(title, form);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    inputs.name.focus();
+  }
+
+  function removeContactLocal(index) {
+    const contacts = Array.isArray(state.contacts) ? state.contacts : [];
+    if (index < 0 || index >= contacts.length) return;
+    if (!window.confirm('להסיר את איש הקשר מהפרויקט?')) return;
+    contacts.splice(index, 1);
+    state.contacts = contacts;
+    renderContactsTableLocal();
+    saveLocalState();
+    if (typeof showToast === 'function') showToast('איש הקשר הוסר.', 'success');
+  }
+</script>

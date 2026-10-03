@@ -1,0 +1,465 @@
+<script>
+  (function () {
+    'use strict';
+
+    var rootId = 'tab-content-publish';
+    var disciplineOrder = ['אדריכלות', 'קונסטרוקציה', 'חשמל', 'אינסטלציה', 'מיזוג אוויר', 'פיתוח'];
+    var labels = { '3d': 'תלת־ממד', '2d': 'דו־ממד', sheet: 'גיליון', unknown: 'סוג לא ידוע' };
+    var checkDefinitions = [
+      { id: 'discipline3d', title: 'תלת־ממד לתחום בלבד' },
+      { id: 'allLinks3d', title: 'תלת־ממד של כל הקישורים' },
+      { id: 'arSt3d', title: 'תלת־ממד משולב אדריכלות וקונסטרוקציה' },
+      { id: 'typical2d', title: 'תכניות דו־ממד לכל קומה טיפוסית' },
+      { id: 'sheets', title: 'גיליונות מסודרים' }
+    ];
+    var modalReturnFocus = null;
+
+    function node(tag, className, text) {
+      var el = document.createElement(tag);
+      if (className) el.className = className;
+      if (text !== undefined && text !== null) el.textContent = String(text);
+      return el;
+    }
+    function safeExternalUrl(value) {
+      if (typeof value !== 'string' || !value.trim()) return '';
+      try {
+        var url = new URL(value, window.location.href);
+        return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
+      } catch (e) { return ''; }
+    }
+    function safeImageData(value) {
+      return typeof value === 'string' && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(value) ? value : '';
+    }
+    function externalLink(value, text, className) {
+      var href = safeExternalUrl(value);
+      if (!href) return null;
+      var a = node('a', className, text);
+      a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      return a;
+    }
+    function setEmpty(container, message) {
+      container.replaceChildren();
+      var box = node('div', 'publish-empty');
+      box.append(node('span', 'publish-empty-icon', '◇'), node('p', '', message));
+      container.append(box);
+    }
+    function normalizedKind(view) {
+      var kind = String(view && view.kind || '').toLowerCase();
+      return Object.prototype.hasOwnProperty.call(labels, kind) ? kind : 'unknown';
+    }
+    function thumbnail(view, model) {
+      var current = safeImageData(view.thumbnailUrl);
+      if (current) return Promise.resolve(current);
+      if (view._thumbnailPromise) return view._thumbnailPromise;
+      if (typeof window.loadPublishThumbnail !== 'function') return Promise.resolve('');
+      view._thumbnailPromise = Promise.resolve().then(function () { return window.loadPublishThumbnail(model, view); }).then(function (value) {
+        var image = safeImageData(value);
+        if (image) view.thumbnailUrl = image;
+        return image;
+      }).catch(function () { return ''; }).finally(function () { view._thumbnailPromise = null; });
+      return view._thumbnailPromise;
+    }
+    function cardFor(view, model) {
+      var kind = normalizedKind(view);
+      var card = node('button', 'publish-card');
+      card.type = 'button';
+      card.setAttribute('aria-label', 'פתיחת תצוגה: ' + String(view.name || 'ללא שם'));
+      var visual = node('span', 'publish-card-visual');
+      visual.append(node('span', 'publish-card-placeholder', '◇ תצוגה מקדימה'));
+      var detail = node('span', 'publish-card-detail');
+      detail.append(node('span', 'publish-kind', labels[kind]), node('strong', 'publish-card-name', view.name || 'תצוגה ללא שם'));
+      if (view.isMasterView === true) detail.append(node('span','publish-master-view-badge','מבט כללי שנוצר בענן'));
+      card.append(visual, detail);
+      card._publishView = view;
+      card.addEventListener('click', function () { openPreview(view, model, kind); });
+      return card;
+    }
+    function viewTable(views,model){
+      var wrap=node('section','publish-table-section');
+      var toolbar=node('div','publish-table-toolbar');var search=node('input','publish-view-search');search.type='search';search.placeholder='חיפוש בשם המבט או הגיליון';search.setAttribute('aria-label','חיפוש מבטים וגיליונות');
+      var filter=node('select','publish-view-filter');filter.setAttribute('aria-label','סוג תצוגה');[['all','כל הסוגים'],['3d','3D'],['2d','מבטי 2D'],['sheet','Sheets'],['unknown','לא מסווג']].forEach(function(pair){var o=node('option','',pair[1]);o.value=pair[0];filter.append(o);});var count=node('span','publish-table-count');toolbar.append(search,filter,count);wrap.append(toolbar);
+      var scroller=node('div','publish-table-scroll'),table=node('table','publish-views-table'),head=node('thead'),hr=node('tr'),body=node('tbody');
+      var hasNumber=views.some(function(v){return !!v.sheetNumber;}),hasName=views.some(function(v){return !!v.sheetName;});
+      var headers=['תצוגה','סוג','שם המבט / הגיליון בענן'];if(hasNumber)headers.push('Sheet Number');if(hasName)headers.push('Sheet Name');headers.push('Publish set','עדכון גרסת הקובץ');headers.forEach(function(t){var th=node('th','',t);th.scope='col';hr.append(th);});head.append(hr);table.append(head,body);scroller.append(table);wrap.append(scroller);
+      var rows=[];views.slice().sort(function(a,b){var order={'3d':0,'2d':1,sheet:2,unknown:3};return order[normalizedKind(a)]-order[normalizedKind(b)]||String(a.name).localeCompare(String(b.name),'he',{numeric:true});}).forEach(function(view){
+        var tr=node('tr'),thumbCell=node('td');var card=cardFor(view,model);card.querySelector('.publish-card-detail').hidden=true;thumbCell.append(card);tr.append(thumbCell);
+        tr.append(node('td','publish-table-kind',normalizedKind(view)==='sheet'?'Sheet':normalizedKind(view)==='3d'?'3D':normalizedKind(view)==='2d'?'2D':'לא מסווג'));
+        var name=node('td','publish-table-name');var open=node('button','publish-name-button',view.name||'ללא שם');open.type='button';open.addEventListener('click',function(){openPreview(view,model,normalizedKind(view));});name.append(open);if(view.isMasterView)name.append(node('small','','מבט כללי שנוצר בענן'));tr.append(name);
+        if(hasNumber)tr.append(node('td','',view.sheetNumber||'—'));if(hasName)tr.append(node('td','',view.sheetName||'—'));tr.append(node('td','',view.publishSet||'—'));tr.append(node('td','publish-table-date',model.versionUpdatedAt?formatReviewDate(model.versionUpdatedAt):'לא זמין'));body.append(tr);rows.push({el:tr,view:view});
+      });
+      function applyFilter(){var q=search.value.trim().toLowerCase(),n=0;rows.forEach(function(r){var v=r.view;var visible=(filter.value==='all'||normalizedKind(v)===filter.value)&&[v.name,v.sheetNumber,v.sheetName,v.publishSet].join(' ').toLowerCase().includes(q);r.el.hidden=!visible;if(visible)n++;});count.textContent=n+' מתוך '+views.length;}
+      search.addEventListener('input',applyFilter);filter.addEventListener('change',applyFilter);applyFilter();
+      wrap.append(node('p','publish-table-note','התאריך הוא עדכון גרסת הקובץ בענן; לא התקבל תאריך Publish נפרד לכל מבט.'+(!hasNumber&&!hasName?' Sheet Name ו־Sheet Number לא הוחזרו כשדות נפרדים; מוצג השם המקורי בענן.':'')));
+      return wrap;
+    }
+    function showThumbnail(img, view, model) {
+      img.alt = view.name || '';
+      return thumbnail(view, model).then(function (src) {
+        if (src && img.isConnected) { img.src = src; img.hidden = false; }
+        return src;
+      });
+    }
+    function openPreview(view, model, kind) {
+      var modal = document.getElementById('publish-preview-modal');
+      var title = document.getElementById('publish-preview-title');
+      var body = document.getElementById('publish-preview-body');
+      var footer = document.getElementById('publish-preview-footer');
+      title.textContent = view.name || 'תצוגה ללא שם';
+      body.replaceChildren(); footer.replaceChildren();
+      var img = document.createElement('img'); img.className = 'publish-preview-image'; img.alt = view.name || 'תצוגת מודל'; img.hidden = true;
+        img.onerror = function () { img.remove(); body.append(node('p', 'publish-preview-note', 'התמונה אינה זמינה כרגע.')); };
+        body.append(img);
+      var placeholder = node('div', 'publish-preview-placeholder', 'טוען תמונה…'); body.append(placeholder);
+      showThumbnail(img, view, model).then(function (src) { if (src && !img.hidden && placeholder.isConnected) placeholder.remove(); else if (placeholder.isConnected) placeholder.textContent='תמונה לא זמינה'; });
+      var meta = node('p', 'publish-preview-meta', [model.name || 'מודל ללא שם', model.discipline || 'תחום לא צוין', labels[kind]].join(' · '));
+      body.append(meta);
+      if (view.isMasterView === true) body.append(node('span','publish-master-view-badge','מבט כללי שנוצר בענן'));
+      var viewer = safeExternalUrl(view.viewerUrl);
+      var modelViewer = safeExternalUrl(model.webView);
+      if (viewer) footer.append(externalLink(viewer, 'פתיחת התצוגה במציג הענן ↗', 'publish-viewer-link'));
+      else if (modelViewer) footer.append(externalLink(modelViewer, 'פתיחת המודל בענן ↗', 'publish-viewer-link'));
+      else footer.append(node('span', 'publish-preview-note', 'לא סופק קישור למודל בענן.'));
+      modalReturnFocus = document.activeElement;
+      modal.hidden = false;
+      modal.querySelector('.publish-modal-dialog').focus();
+    }
+    function closePreview(modal) {
+      if (!modal || modal.hidden) return;
+      modal.hidden = true;
+      if (modalReturnFocus && modalReturnFocus.isConnected) modalReturnFocus.focus();
+      modalReturnFocus = null;
+    }
+    function reviewIsCurrent(model) {
+      return !!(model.review && model.review.versionId === model.versionId);
+    }
+    function reviewStatus(model) {
+      if (!model.review) return 'טרם נבדק';
+      if (!reviewIsCurrent(model)) return 'נדרשת בדיקה חוזרת';
+      var checks = Array.isArray(model.review.checks) ? model.review.checks : [];
+      if (checks.some(function (check) { return check.status === 'FAIL'; })) return 'נמצאו פערים';
+      if (checks.length && checks.every(function (check) { return check && check.status === 'NA'; })) return 'לא נדרש בהחלטת מנהל';
+      if (checks.length && checks.every(function (check) { return check && (check.status === 'PASS' || check.status === 'NA'); })) return 'אושר בבקרה';
+      return 'טרם נבדק';
+    }
+    function formatReviewDate(value) {
+      if (!value) return '';
+      var date = new Date(value);
+      return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat('he-IL', { dateStyle: 'short', timeStyle: 'short' }).format(date);
+    }
+    function refreshReviewSummary(model, form) {
+      var details=form.closest('.publish-model');if(!details)return;
+      var badge=details.querySelector('.publish-review-status-badge');
+      if(badge){var text=reviewStatus(model);badge.textContent=text;badge.className='publish-review-status-badge '+(text==='אושר בבקרה'?'is-approved':text==='נמצאו פערים'?'has-findings':text==='נדרשת בדיקה חוזרת'?'is-stale':text==='לא נדרש בהחלטת מנהל'?'is-not-required':'is-unreviewed');}
+      var panel=form.parentElement;var audit=panel.querySelector('.publish-review-audit');
+      var parts=[];var review=model.review||{};
+      if(review.owner||review.reviewer)parts.push('בודק: '+(review.owner||review.reviewer));
+      if(review.updatedAt||review.reviewedAt||review.capturedAt)parts.push('מועד: '+formatReviewDate(review.updatedAt||review.reviewedAt||review.capturedAt));
+      if(!reviewIsCurrent(model))parts.push('הבקרה הקודמת לגרסה '+String(review.versionId==null?'לא ידועה':review.versionId));
+      if(parts.length){if(!audit){audit=node('p','publish-review-audit');panel.insertBefore(audit,form);}audit.textContent=parts.join(' · ');}
+      else if(audit)audit.remove();
+    }
+    function reviewForm(model) {
+      var form = node('form', 'publish-review-form');
+      form.noValidate = true;
+      form.append(node('h4', 'publish-review-title', 'בדיקת תכולת הפרסום'));
+      var currentReview = reviewIsCurrent(model);
+      var existing = currentReview && Array.isArray(model.review.checks) ? model.review.checks : [];
+      checkDefinitions.forEach(function (definition) {
+        var previous = existing.find(function (item) { return item.id === definition.id; }) || {};
+        var row = node('div', 'publish-review-row');
+        var head = node('div', 'publish-review-check-heading');
+        head.append(node('strong', '', definition.title));
+        var controls = node('div', 'publish-review-controls');
+        var status = document.createElement('select'); status.className = 'publish-review-status'; status.setAttribute('aria-label', 'סטטוס: ' + definition.title);
+        [['UNREVIEWED','טרם נבדק'],['PASS','תקין'],['FAIL','לא תקין'],['NA','לא רלוונטי']].forEach(function (option) { var el = node('option','',option[1]);el.value=option[0];status.append(el); });
+        status.value = previous.status || 'UNREVIEWED';
+        var multiEvidence = definition.id === 'typical2d' || definition.id === 'sheets';
+        var viewSelect = document.createElement('select'); viewSelect.className = 'publish-review-view'; viewSelect.setAttribute('aria-label','תצוגת ראיה: ' + definition.title);
+        if (multiEvidence) { viewSelect.multiple = true; viewSelect.size = 4; }
+        var blank = node('option','','בחירת תצוגת ראיה'); blank.value=''; viewSelect.append(blank);
+        var evidenceKind = definition.id === 'typical2d' ? '2d' : definition.id === 'sheets' ? 'sheet' : '3d';
+        (Array.isArray(model.views) ? model.views : []).filter(function(view){return normalizedKind(view) === evidenceKind;}).forEach(function (view) { var option=node('option','',view.name || 'תצוגה ללא שם');option.value=String(view.id || '');viewSelect.append(option); });
+        if (Array.isArray(previous.viewIds) && previous.viewIds.length) Array.from(viewSelect.options).forEach(function(option){if(previous.viewIds.map(String).indexOf(option.value)>=0)option.selected=true;});
+        var note = document.createElement('textarea'); note.className='publish-review-note'; note.rows=2; note.maxLength=2000; note.placeholder='הערה לבקרה'; note.setAttribute('aria-label','הערה: ' + definition.title); note.value=previous.note || '';
+        controls.append(status,viewSelect,note);
+        if (multiEvidence) { var tip=node('small','publish-evidence-tip','אפשר לבחור כמה תצוגות.');tip.style.gridColumn='1 / -1';controls.append(tip); }
+        row.append(head,controls); form.append(row);
+      });
+      var actions = node('div','publish-review-actions');
+      var save = node('button','publish-review-save','שמירת בדיקה'); save.type='submit';
+      var writable = model.reviewWritable !== false;
+      save.disabled = !writable;
+      if (!writable) form.append(node('p','publish-review-result is-error',model.reviewError || model.reviewMessage || 'לא ניתן לקרוא את נתוני הבקרה ולכן השמירה אינה זמינה.'));
+      var result = node('span','publish-review-result'); result.setAttribute('aria-live','polite');
+      actions.append(save,result); form.append(actions);
+      form.addEventListener('submit',function(event){
+        event.preventDefault();
+        if (!writable) { result.textContent=model.reviewError || model.reviewMessage || 'השמירה אינה זמינה לקריאה זו.';result.className='publish-review-result is-error';return; }
+        if(typeof window.savePublishReview !== 'function'){ result.textContent='שמירת הבקרה עדיין אינה זמינה.';result.className='publish-review-result is-error';return; }
+        var checks;
+        try { checks=Array.from(form.querySelectorAll('.publish-review-row')).map(function(row,index){
+          var fields=row.querySelectorAll('select');var selectedEvidence=Array.from(fields[1].selectedOptions).map(function(option){return option.value;}).filter(Boolean);var check={id:checkDefinitions[index].id,status:fields[0].value,note:row.querySelector('textarea').value.trim(),viewIds:selectedEvidence};
+          if(check.status==='PASS'&&(!check.note||!check.viewIds.length)) throw new Error('לסימון תקין נדרשים הערה ותצוגת ראיה בכל הסעיפים.');
+          if((check.status==='FAIL'||check.status==='NA')&&!check.note) throw new Error('לסימון לא תקין או לא רלוונטי נדרשת הערה.');
+          return check;
+        }); } catch(validationError) { result.textContent=validationError.message;result.className='publish-review-result is-error';return; }
+        var payload={revision:model.review && model.review.revision != null ? model.review.revision : 0,checks:checks};
+        save.disabled=true;result.textContent='שומר…';result.className='publish-review-result';
+        Promise.resolve().then(function(){return window.savePublishReview(model,payload);}).then(function(response){
+          if(!response || response.ok!==true) throw new Error(response && response.message || 'לא התקבל אישור שמירה מהשרת.');
+          model.review=response && response.review ? response.review : {revision:payload.revision,checks:checks};
+          if (model.review.versionId == null) model.review.versionId = model.versionId;
+          refreshReviewSummary(model,form);
+          result.textContent=response && response.message || 'השרת אישר את שמירת הבקרה.';result.className='publish-review-result is-success';
+        }).catch(function(error){result.textContent=error && error.message || 'השמירה נכשלה. לא התקבל אישור מהשרת.';result.className='publish-review-result is-error';}).finally(function(){save.disabled=false;});
+      });
+      return form;
+    }
+    function groupModels(models) {
+      var groups = new Map();
+      models.forEach(function (model) {
+        var name = String(model && model.discipline || '').trim() || 'תחום לא צוין';
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(model || {});
+      });
+      return Array.from(groups.entries()).sort(function (a, b) {
+        var ai = disciplineOrder.indexOf(a[0]), bi = disciplineOrder.indexOf(b[0]);
+        if (ai < 0 && bi < 0) return a[0].localeCompare(b[0], 'he');
+        if (ai < 0) return 1; if (bi < 0) return -1; return ai - bi;
+      });
+    }
+    function renderPublishControl(snapshot) {
+      var root = document.getElementById(rootId);
+      if (!root) return;
+      var content = root.querySelector('#publish-content');
+      var meta = root.querySelector('#publish-snapshot-meta');
+      meta.replaceChildren();
+      if (snapshot && snapshot.projectNo) meta.append(node('span', 'publish-project-number', 'פרויקט ' + snapshot.projectNo));
+      if (snapshot && snapshot.capturedAt) meta.append(node('span', 'publish-captured-at', 'צילום נתונים: ' + formatReviewDate(snapshot.capturedAt)));
+      if (!snapshot || !Array.isArray(snapshot.models)) {
+        setEmpty(content, 'מקור נתוני תצוגות הענן אינו זמין.'); return;
+      }
+      if (!snapshot.models.length) { setEmpty(content, 'לא נמצאו מודלים בצילום הנתונים.'); return; }
+      content.replaceChildren();
+      var scope=node('details','publish-source-details');scope.append(node('summary','','מקור המידע והיקף הבדיקה'));scope.append(node('p','',snapshot.scope||'תוכן שזמין בענן בזמן הקריאה.'));scope.append(node('p','','הדיסציפלינה וההשתתפות בבקרה נקבעות ב״מבנה הפרויקט והמודלים״. שם הקובץ ותיקיית המקור אינם אישור לשיוך. מועד הצילום אינו מועד Publish; קיום מבט אינו אישור לתכולתו.'));content.append(scope);
+      var activeFilter=snapshot.controlFilter||'included';
+      var toolbar=node('div','publish-governance-toolbar');
+      [['included','משתתפים בבקרה'],['pending','ממתינים לסיווג'],['excluded','מוחרגים מהבקרה']].forEach(function(pair){
+        var count=snapshot.models.filter(function(m){return m.controlState===pair[0];}).length;
+        var button=node('button','publish-scope-button'+(activeFilter===pair[0]?' is-active':''),pair[1]+' · '+count);button.type='button';button.setAttribute('aria-pressed',String(activeFilter===pair[0]));
+        button.addEventListener('click',function(){snapshot.controlFilter=pair[0];renderPublishControl(snapshot);});toolbar.append(button);
+      });
+      var manage=node('button','publish-scope-button','ניהול שיוכים ובקרות');manage.type='button';manage.addEventListener('click',function(){if(window.openModelGovernance)window.openModelGovernance();});toolbar.append(manage);content.append(toolbar);
+      var displayed=snapshot.models.filter(function(m){return m.controlState===activeFilter;});
+      if(!displayed.length)content.append(node('p','publish-no-views',snapshot.governanceAvailable===false?'לא ניתן להציג חלוקה לבקרה עד לטעינת הגדרות השיוך.':activeFilter==='included'?'אין כרגע מודלים שסווגו להשתתפות ב־Publish. קבצי הענן זמינים בלשונית ״ממתינים לסיווג״.':'אין מודלים בקבוצה זו.'));
+      groupModels(displayed).forEach(function (entry) {
+        var discipline = node('section', 'publish-discipline');
+        var heading = node('div', 'publish-discipline-heading');
+        heading.append(node('h3', '', entry[0]), node('span', 'publish-count', entry[1].length + ' מודלים'));
+        discipline.append(heading);
+        entry[1].forEach(function (model) {
+          var details = document.createElement('details'); details.className = 'publish-model';
+          var summary = document.createElement('summary'); summary.className = 'publish-model-summary';
+          var titleWrap = node('span', 'publish-model-title');
+          titleWrap.append(node('strong', '', model.name || 'מודל ללא שם'));
+          var version = model.version ? 'גרסה ' + model.version : 'גרסה לא צוינה';
+          titleWrap.append(node('span', 'publish-model-version', version));
+          summary.append(titleWrap);
+          var liveViewsReady = model._liveViewsLoaded === true;
+          var status = String(liveViewsReady ? (model.viewsStatus || (Array.isArray(model.views) ? 'loaded' : 'NOT_READ')) : 'NOT_READ').toUpperCase();
+          var statusText = status === 'LOADED' || status === 'READ_AVAILABLE' ? 'נתוני תצוגות זמינים' : status === 'READ_FAILED' || status === 'ERROR' ? 'שגיאה בקריאת התצוגות' : status === 'EMPTY' ? 'לא נמצאו תצוגות' : 'נתוני התצוגות טרם נקראו';
+          var pill = node('span', 'publish-status publish-status-' + String(status).replace(/[^a-z0-9_-]/gi, ''), statusText);
+          var views = liveViewsReady && Array.isArray(model.views) ? model.views : [];
+          var counts = node('span','publish-model-counts');
+          [['3d','3D'],['2d','2D'],['sheet','גיליונות']].forEach(function(pair){counts.append(node('span','publish-count-chip',pair[1]+' '+views.filter(function(view){return normalizedKind(view||{})===pair[0];}).length));});
+          var currentReview = reviewIsCurrent(model);
+          var reviewPill = node('span','publish-review-status-badge',model.controlState==='pending'?'ממתין לסיווג':model.controlState==='excluded'?'מוחרג · לא נספר בבקרה':reviewStatus(model));
+          reviewPill.classList.add(reviewStatus(model)==='אושר בבקרה'?'is-approved':reviewStatus(model)==='נמצאו פערים'?'has-findings':reviewStatus(model)==='נדרשת בדיקה חוזרת'?'is-stale':reviewStatus(model)==='לא נדרש בהחלטת מנהל'?'is-not-required':'is-unreviewed');
+          summary.append(pill,counts,reviewPill); details.append(summary);
+          var panel = node('div', 'publish-model-panel');
+          var decision=model.governance;
+          if(decision&&decision.classified){
+            panel.append(node('p','publish-review-audit',['רישום: '+(decision.registerCode||'ללא שיוך לרישום'),'מבנה: '+(decision.buildingCode||'—'),'מגרש: '+(decision.lotCode||'—')].join(' · ')));
+            if(decision.notes)panel.append(node('p','publish-source-message','הערת מנהל מודל: '+decision.notes));
+            if(model.controlState==='excluded')panel.append(node('p','publish-source-message','סיבת החרגה: '+decision.exclusionReason));
+            panel.append(node('p','publish-review-audit','הגדרת שיוך ובקרות: '+decision.updatedBy+' · '+formatReviewDate(decision.updatedAt)));
+          }
+          if(model.folderPath)panel.append(node('p','publish-review-audit','תיקיית מקור: '+model.folderPath));
+          var editPolicy=node('button','publish-scope-button','עריכת שיוך ובקרות');editPolicy.type='button';editPolicy.addEventListener('click',function(){if(window.openModelGovernance)window.openModelGovernance(model.id);});panel.append(editPolicy);
+          if (liveViewsReady && model.viewsMessage) {
+            if (model.viewsMessage.length > 180) { var sourceDetails=document.createElement('details');sourceDetails.className='publish-source-details';sourceDetails.append(node('summary','','פרטי מקור טכניים'));sourceDetails.append(node('p','publish-source-message',model.viewsMessage));panel.append(sourceDetails); }
+            else panel.append(node('p', 'publish-source-message', model.viewsMessage));
+          }
+          if (model.review) {
+            var audit=node('p','publish-review-audit');
+            var auditParts=[];
+            if(model.review.owner || model.review.reviewer || model.review.updatedBy) auditParts.push('בודק: '+(model.review.owner || model.review.reviewer));
+            if(model.review.updatedAt || model.review.reviewedAt || model.review.capturedAt) auditParts.push('מועד: '+formatReviewDate(model.review.updatedAt || model.review.reviewedAt || model.review.capturedAt));
+            if(!currentReview) auditParts.push('הבקרה הקודמת לגרסה '+String(model.review.versionId == null ? 'לא ידועה' : model.review.versionId));
+            if(auditParts.length) audit.textContent=auditParts.join(' · ');
+            if(auditParts.length) panel.append(audit);
+          }
+          if (views.length) {
+            panel.append(viewTable(views,model));
+          } else {
+            panel.append(node('p', 'publish-no-views', (liveViewsReady && model.viewsMessage) || (status === 'EMPTY' || status === 'READ_AVAILABLE' || status === 'LOADED' ? 'לא התקבלו פרטי תצוגות בצילום הנתונים.' : status === 'READ_FAILED' || status === 'ERROR' ? 'קריאת התצוגות נכשלה.' : 'פתח את המודל כדי לטעון את רשימת התצוגות מ-Autodesk.')));
+          }
+          details.setAttribute('data-publish-model-id',String(model.id));
+          details.addEventListener('toggle',function(){
+            if(!details.open){if(snapshot.openModelId===String(model.id))snapshot.openModelId='';if(model._liveViewsFailed)model._liveViewsFailed=false;return;}
+            snapshot.openModelId=String(model.id);
+            if(!model._liveViewsLoaded&& !model._liveViewsLoading && !model._liveViewsFailed && typeof window.loadPublishModelViews==='function'){
+              model._liveViewsLoading=true;model.viewsStatus='LOADING';model.viewsMessage='טוען רשימת תצוגות מהגרסה הנוכחית ב-Autodesk…';
+              window.loadPublishModelViews(model).then(function(result){model._liveViewsLoading=false;if(!result||!result.model)return;if(!state.selectedProject||String(state.selectedProject.no)!==String(model.projectNo))return;renderPublishControl(snapshot);}).catch(function(error){model._liveViewsLoading=false;model._liveViewsFailed=true;model.viewsStatus='READ_FAILED';model.viewsMessage='לא ניתן לטעון את תצוגות המודל: '+String(error&&error.message||error||'שגיאה');if(state.selectedProject&&String(state.selectedProject.no)===String(model.projectNo))renderPublishControl(snapshot);});return;
+            }
+            if(!model._liveViewsLoaded)return;
+            panel.querySelectorAll('.publish-card').forEach(function(card){var view=card._publishView;var image=card.querySelector('img');if(!image){image=document.createElement('img');image.hidden=true;image.alt='';card.querySelector('.publish-card-visual').append(image);}var placeholder=card.querySelector('.publish-card-placeholder');if(placeholder)placeholder.textContent='טוען תמונה…';showThumbnail(image,view,model).then(function(src){if(!placeholder)return;if(src&&!image.hidden)placeholder.hidden=true;else{placeholder.hidden=false;placeholder.textContent='תמונה לא זמינה';}});});
+          });
+          if(snapshot.openModelId===String(model.id))details.open=true;
+          var web = externalLink(model.webView, 'פתיחת המודל בענן ↗', 'publish-model-link');
+          if (web) panel.append(web);
+          if(model.controlState==='included')panel.append(reviewForm(model));
+          else panel.append(node('p','publish-no-views',model.controlState==='excluded'?'המודל מוחרג מ־Publish ואינו נספר כתקין או כחסר. החלטות קודמות נשמרות בהיסטוריה.':'יש לסווג את המודל ולהגדיר השתתפות ב־Publish לפני שמירת בקרה.'));
+          details.append(panel); discipline.append(details);
+        });
+        content.append(discipline);
+      });
+    }
+
+    document.addEventListener('click', function (event) {
+      if (event.target.closest('[data-publish-close]')) closePreview(document.getElementById('publish-preview-modal'));
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') {
+        var modal = document.getElementById('publish-preview-modal');
+        if (modal && !modal.hidden) { closePreview(modal); return; }
+      }
+      var modal=document.getElementById('publish-preview-modal');
+      if (event.key==='Tab' && modal && !modal.hidden) {
+        var focusable=Array.from(modal.querySelectorAll('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex]:not([tabindex="-1"])')).filter(function(el){return el.offsetParent!==null;});
+        if(!focusable.length){event.preventDefault();return;}
+        var first=focusable[0],last=focusable[focusable.length-1];
+        if(event.shiftKey&&(document.activeElement===first||document.activeElement===modal.querySelector('.publish-modal-dialog'))){event.preventDefault();last.focus();}
+        else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+      }
+    });
+
+    // Integration contract: call renderPublishControl(snapshot) whenever the
+    // selected project's cloud-view snapshot is available or refreshed.
+    window.renderPublishControl = renderPublishControl;
+  }());
+</script>
+<style>
+  #tab-content-publish { color:#1e293b; }
+  #tab-content-publish .publish-header { display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:5px 2px 18px;border-bottom:1px solid #e6ebef; }
+  #tab-content-publish .publish-eyebrow { margin:0 0 4px;color:#087e83;font-size:11px;font-weight:800;letter-spacing:.08em; }
+  #tab-content-publish .publish-header h2 { margin:0;font-size:27px;line-height:1.2;font-weight:800; }
+  #tab-content-publish .publish-lead { margin:6px 0 0;color:#64748b;font-size:14px; }
+  #tab-content-publish .publish-cadence { margin:6px 0 0;color:#64748b;font-size:12px; }
+  #tab-content-publish .publish-meta { display:flex;flex-wrap:wrap;gap:7px;align-items:center;color:#64748b;font-size:12px; }
+  #tab-content-publish .publish-project-number,#tab-content-publish .publish-captured-at { padding:6px 9px;border:1px solid #e6ebef;border-radius:7px;background:#fff; }
+  #tab-content-publish .publish-requirements { padding:17px 18px;border:1px solid #dce9e9;border-radius:11px;background:#f5fbfa; }
+  #tab-content-publish .publish-requirements-heading { display:flex;align-items:flex-start;gap:10px; }
+  #tab-content-publish .publish-info-mark { display:grid;place-items:center;width:23px;height:23px;flex:none;border-radius:50%;background:#d9efed;color:#087e83;font-weight:800; }
+  #tab-content-publish .publish-requirements h3 { margin:0;font-size:15px;font-weight:800; }
+  #tab-content-publish .publish-requirements p { margin:2px 0 0;color:#64748b;font-size:12px; }
+  #tab-content-publish .publish-requirements ul { display:flex;flex-wrap:wrap;gap:8px;margin:13px 0 0;padding:0;list-style:none; }
+  #tab-content-publish .publish-requirements li { padding:7px 10px;border:1px solid #e1eeed;border-radius:7px;background:#fff;color:#475569;font-size:12px; }
+  #tab-content-publish .publish-requirements li strong { color:#334155; }
+  #tab-content-publish .publish-content { display:flex;flex-direction:column;gap:16px; }
+  #tab-content-publish .publish-governance-toolbar { display:flex;gap:8px;flex-wrap:wrap; }
+  #tab-content-publish .publish-scope-button { padding:8px 12px;border:1px solid #dbe4ed;border-radius:8px;background:#fff;color:#334155;font:inherit;font-size:13px;cursor:pointer; }
+  #tab-content-publish .publish-scope-button.is-active { background:#eff6ff;border-color:#60a5fa;color:#1d4ed8;font-weight:700; }
+  #tab-content-publish .publish-discipline { overflow:hidden;border:1px solid #e6ebef;border-radius:11px;background:#fff;box-shadow:0 2px 7px rgba(15,23,42,.025); }
+  #tab-content-publish .publish-discipline-heading { display:flex;align-items:center;gap:10px;padding:13px 16px;background:#f5f8f9;border-bottom:1px solid #e6ebef; }
+  #tab-content-publish .publish-discipline-heading h3 { margin:0;font-size:16px;font-weight:800; }
+  #tab-content-publish .publish-count { color:#64748b;font-size:12px; }
+  #tab-content-publish .publish-model { border-bottom:1px solid #edf1f3; }
+  #tab-content-publish .publish-model:last-child { border-bottom:0; }
+  #tab-content-publish .publish-model-summary { display:flex;align-items:center;gap:14px;padding:13px 16px;cursor:pointer;list-style:none; }
+  #tab-content-publish .publish-model-summary::-webkit-details-marker { display:none; }
+  #tab-content-publish .publish-model-summary::before { content:'⌄';color:#78909a;font-size:16px;transition:transform .15s; }
+  #tab-content-publish details[open] > .publish-model-summary::before { transform:rotate(180deg); }
+  #tab-content-publish .publish-model-title { display:flex;align-items:baseline;gap:10px;flex:1;min-width:0; }
+  #tab-content-publish .publish-model-title strong { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px; }
+  #tab-content-publish .publish-model-version { color:#64748b;font-size:12px;white-space:nowrap; }
+  #tab-content-publish .publish-master-view-badge { padding:3px 7px;border:1px solid #cfe6e3;border-radius:12px;background:#eff9f7;color:#087e83;font-size:10px;font-weight:700;white-space:nowrap; }
+  #tab-content-publish .publish-model-counts { display:flex;gap:5px; }
+  #tab-content-publish .publish-count-chip { padding:3px 6px;border-radius:5px;background:#f1f5f6;color:#64748b;font-size:10px;white-space:nowrap; }
+  #tab-content-publish .publish-review-status-badge { padding:4px 8px;border-radius:20px;background:#f1f5f9;color:#64748b;font-size:11px;white-space:nowrap; }
+  #tab-content-publish .publish-review-status-badge.is-approved { background:#e8f5ef;color:#20704d; }
+  #tab-content-publish .publish-review-status-badge.has-findings { background:#fff1f0;color:#a43e37; }
+  #tab-content-publish .publish-review-status-badge.is-stale { background:#fff5df;color:#8a5b13; }
+  #tab-content-publish .publish-review-status-badge.is-not-required { background:#eef2f6;color:#526570; }
+  #tab-content-publish .publish-review-audit { margin:0 0 11px;color:#64748b;font-size:11px; }
+  #tab-content-publish .publish-source-details { margin:0 0 12px;color:#64748b;font-size:12px; }
+  #tab-content-publish .publish-source-details summary { cursor:pointer; }
+  #tab-content-publish .publish-source-details .publish-source-message { margin-top:7px;white-space:pre-wrap; }
+  #tab-content-publish .publish-status { padding:4px 8px;border-radius:20px;background:#f1f5f9;color:#64748b;font-size:11px;white-space:nowrap; }
+  #tab-content-publish .publish-status-loaded { background:#e8f5ef;color:#20704d; }
+  #tab-content-publish .publish-status-error { background:#fff1f0;color:#a43e37; }
+  #tab-content-publish .publish-model-panel { padding:2px 18px 17px 43px; }
+  #tab-content-publish .publish-source-message,#tab-content-publish .publish-no-views { margin:0 0 12px;color:#64748b;font-size:13px; }
+  #tab-content-publish .publish-card-grid { display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px; }
+  #tab-content-publish .publish-view-subsection { margin-top:15px; }
+  #tab-content-publish .publish-view-heading { margin:0 0 8px;color:#536875;font-size:13px;font-weight:800; }
+  #tab-content-publish .publish-card { display:block;overflow:hidden;padding:0;border:1px solid #e3e9ed;border-radius:9px;background:#fff;text-align:right;cursor:pointer;transition:border-color .15s,box-shadow .15s; }
+  #tab-content-publish .publish-card:hover { border-color:#8bbfc0;box-shadow:0 3px 10px rgba(8,126,131,.10); }
+  #tab-content-publish .publish-card-visual { display:grid;place-items:center;min-height:180px;aspect-ratio:16/10;overflow:hidden;background:#fff;color:#64748b;font-size:13px; }
+  #tab-content-publish .publish-card-visual img { width:100%;height:100%;object-fit:contain; }
+  #tab-content-publish .publish-card-placeholder { padding:10px;text-align:center; }
+  #tab-content-publish .publish-card-detail { display:flex;flex-direction:column;gap:4px;padding:9px 11px; }
+  #tab-content-publish .publish-kind { color:#087e83;font-size:10px;font-weight:800; }
+  #tab-content-publish .publish-card-name { overflow:hidden;color:#334155;font-size:13px;text-overflow:ellipsis;white-space:nowrap; }
+  #tab-content-publish .publish-model-link,#tab-content-publish .publish-viewer-link { display:inline-flex;margin-top:13px;color:#176f75;font-size:13px;font-weight:700;text-decoration:none; }
+  #tab-content-publish .publish-model-link:hover,#tab-content-publish .publish-viewer-link:hover { text-decoration:underline; }
+  #tab-content-publish .publish-empty { display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:155px;padding:24px;border:1px dashed #cbd8dc;border-radius:11px;background:#fff;color:#64748b;text-align:center; }
+  #tab-content-publish .publish-empty p { margin:9px 0 0;font-size:14px; }
+  #tab-content-publish .publish-empty-icon { color:#91a8af;font-size:28px; }
+  #tab-content-publish .publish-modal[hidden] { display:none; }
+  #tab-content-publish .publish-modal { position:fixed;inset:0;z-index:200;display:grid;place-items:center;padding:20px; }
+  #tab-content-publish .publish-modal-backdrop { position:absolute;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(2px); }
+  #tab-content-publish .publish-modal-dialog { position:relative;display:flex;flex-direction:column;width:min(860px,100%);max-height:90vh;overflow:auto;border:1px solid #e6ebef;border-radius:13px;background:#fff;box-shadow:0 20px 55px rgba(15,23,42,.22); }
+  #tab-content-publish .publish-modal-dialog > header { display:flex;align-items:center;justify-content:space-between;padding:17px 20px;border-bottom:1px solid #e8edef; }
+  #tab-content-publish .publish-modal-dialog h2 { margin:0;font-size:19px; }
+  #tab-content-publish .publish-close { width:34px;height:34px;border:0;border-radius:7px;background:#f1f5f6;color:#526570;font-size:24px;cursor:pointer; }
+  #tab-content-publish .publish-preview-body { display:grid;justify-items:center;gap:10px;padding:20px; }
+  #tab-content-publish .publish-preview-image { display:block;max-width:100%;max-height:58vh;object-fit:contain;border:1px solid #edf1f3;border-radius:7px; }
+  #tab-content-publish .publish-preview-placeholder { display:grid;place-items:center;width:100%;min-height:260px;border-radius:8px;background:#f1f5f6;color:#91a8af;font-size:52px; }
+  #tab-content-publish .publish-preview-note,#tab-content-publish .publish-preview-meta { margin:0;color:#64748b;font-size:13px; }
+  #tab-content-publish .publish-preview-meta { color:#475569; }
+  #tab-content-publish .publish-review-form { margin-top:18px;padding:15px;border:1px solid #e2e9ec;border-radius:9px;background:#fafcfc; }
+  #tab-content-publish .publish-review-title { margin:0 0 10px;font-size:14px;font-weight:800; }
+  #tab-content-publish .publish-review-row { padding:10px 0;border-top:1px solid #e9eef0; }
+  #tab-content-publish .publish-review-check-heading { margin-bottom:7px;font-size:13px; }
+  #tab-content-publish .publish-review-controls { display:grid;grid-template-columns:minmax(130px,170px) minmax(180px,1fr) minmax(180px,1fr);gap:8px; }
+  #tab-content-publish .publish-review-controls select,#tab-content-publish .publish-review-controls textarea { min-width:0;padding:8px;border:1px solid #dce4e9;border-radius:7px;background:#fff;color:#334155;font:inherit;font-size:12px; }
+  #tab-content-publish .publish-review-controls select[multiple] { min-height:88px; }
+  #tab-content-publish .publish-evidence-tip { color:#64748b;font-size:11px; }
+  #tab-content-publish .publish-review-actions { display:flex;align-items:center;gap:12px;margin-top:12px; }
+  #tab-content-publish .publish-review-save { padding:8px 13px;border:0;border-radius:7px;background:#087e83;color:white;font-size:12px;font-weight:700;cursor:pointer; }
+  #tab-content-publish .publish-review-save:disabled { opacity:.55;cursor:wait; }
+  #tab-content-publish .publish-review-result { color:#64748b;font-size:12px; }
+  #tab-content-publish .publish-review-result.is-success { color:#20704d; }
+  #tab-content-publish .publish-review-result.is-error { color:#a43e37; }
+  #tab-content-publish .publish-modal-dialog > footer { padding:13px 20px;border-top:1px solid #e8edef; }
+  @media(max-width:680px) { #tab-content-publish .publish-header { align-items:flex-start;flex-direction:column;gap:10px; } #tab-content-publish .publish-model-summary { flex-wrap:wrap;gap:8px; } #tab-content-publish .publish-model-title { flex-basis:100%; } #tab-content-publish .publish-model-panel { padding-inline:16px; } #tab-content-publish .publish-requirements ul { display:grid;grid-template-columns:1fr; } #tab-content-publish .publish-review-controls { grid-template-columns:1fr; } #tab-content-publish .publish-model-counts { flex-wrap:wrap; } }
+  #tab-content-publish .publish-table-toolbar{display:flex;gap:10px;align-items:center;margin:12px 0}
+  #tab-content-publish .publish-view-search{flex:1;min-width:140px}
+  #tab-content-publish .publish-table-toolbar input,#tab-content-publish .publish-table-toolbar select{padding:7px 10px;border:1px solid #dce4ec;border-radius:7px;background:white;font:inherit}
+  #tab-content-publish .publish-table-count{font-size:12px;color:#64748b;white-space:nowrap}
+  #tab-content-publish .publish-table-scroll{max-height:520px;overflow:auto;border:1px solid #e2e8f0;border-radius:9px}
+  #tab-content-publish .publish-views-table{width:100%;border-collapse:collapse;font-size:13px;text-align:right}
+  #tab-content-publish .publish-views-table th{position:sticky;top:0;background:#f1f5f9;padding:10px;z-index:1;white-space:nowrap}
+  #tab-content-publish .publish-views-table td{padding:6px 10px;border-top:1px solid #edf1f5;vertical-align:middle}
+  #tab-content-publish .publish-views-table tr:hover{background:#f8fafc}
+  #tab-content-publish .publish-views-table .publish-card{width:76px;border-radius:5px}
+  #tab-content-publish .publish-views-table .publish-card-visual{height:58px;min-height:58px;width:74px}
+  #tab-content-publish .publish-views-table .publish-card-detail[hidden]{display:none}
+  #tab-content-publish .publish-views-table .publish-card-placeholder{font-size:10px;padding:3px;text-align:center}
+  #tab-content-publish .publish-table-name{min-width:180px}
+  #tab-content-publish .publish-name-button{background:none;border:0;color:#1d4ed8;text-align:start;font:inherit;cursor:pointer}
+  #tab-content-publish .publish-table-name small{display:block;color:#64748b;font-size:11px}
+  #tab-content-publish .publish-table-date{white-space:nowrap;font-size:12px;color:#64748b}
+  #tab-content-publish .publish-table-note{font-size:12px;color:#64748b;margin:8px 0 18px}
+</style>

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AMEC BIMBOT</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <?!= include('Style'); ?>
+  <?!= include('Style_Pilot'); ?>
+</head>
+<body class="text-slate-800 font-sans antialiased overflow-hidden flex flex-row-reverse h-screen">
+
+  <aside id="main-sidebar" dir="rtl" class="flex w-64 bg-white border-l border-slate-200 flex-col justify-between shadow-sm z-20">
+    <div>
+      <div class="h-16 flex items-center justify-end px-4 border-b border-slate-100 cursor-pointer hover:bg-slate-50 transition" onclick="showView('dashboard')" title="מעבר ללוח הבקרה">
+        <div class="flex items-center gap-1.5" dir="ltr">
+          <span class="bimbot-logo-text text-black font-black text-xl tracking-wide whitespace-nowrap">AMEC BIMBOT</span>
+          <svg class="w-5 h-5 shrink-0 text-slate-400 hover:text-blue-600 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-label="בית"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+        </div>
+      </div>
+      <nav class="p-3 space-y-1">
+        <button id="nav-btn-projects" onclick="showView('dashboard')" class="w-full flex items-center gap-3 bg-blue-50 text-blue-700 px-3 py-2 rounded-lg font-semibold text-sm transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+          <span>פרויקטים</span>
+        </button>
+        <button id="nav-btn-documents" onclick="showView('documents')" class="w-full flex items-center gap-3 text-slate-500 hover:text-slate-800 hover:bg-slate-50 px-3 py-2 rounded-lg font-medium text-sm transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+          <span>ניהול BIM</span>
+        </button>
+      </nav>
+    </div>
+    <div class="p-3 border-t border-slate-100">
+        <button id="nav-btn-settings" onclick="showView('settings')" class="hidden w-full flex items-center gap-3 text-slate-500 hover:text-slate-800 hover:bg-slate-50 px-3 py-2 rounded-lg font-medium text-sm transition">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+            <span>מרכז זהויות</span>
+        </button>
+    </div>
+  </aside>
+
+  <main id="app-container" class="flex flex-1 flex-col h-full overflow-hidden relative">
+    
+    <header class="h-14 bg-white flex flex-row-reverse justify-between items-center px-4 border-b border-slate-200 shadow-sm z-10 shrink-0">
+      <div class="flex-1">
+        <span id="cloud-save-status" class="text-xs font-bold text-slate-400 opacity-0 transition-opacity duration-300 flex items-center">
+            <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            נשמר בענן
+        </span>
+      </div>
+      
+      <div id="auth-section" class="flex items-center gap-4">
+        <button id="btn-login" onclick="authenticateUser()" class="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:shadow-md font-medium py-1.5 px-4 rounded-lg flex items-center transition shadow-sm text-sm relative z-50 cursor-pointer">
+          <svg class="w-5 h-5 mr-3" viewBox="0 0 256 262" preserveAspectRatio="xMidYMid" xmlns="http://www.w3.org/2000/svg">
+            <path d="M255.878 133.451c0-10.734-.871-18.567-2.756-26.69H130.55v48.448h71.947c-1.45 12.04-9.283 30.172-26.69 42.356l-.244 1.622 38.755 30.023 2.685.268c24.659-22.774 38.875-56.282 38.875-96.027" fill="#4285F4"></path>
+            <path d="M130.55 261.1c35.248 0 64.839-11.605 86.453-31.622l-41.196-31.913c-11.024 7.688-25.82 13.055-45.257 13.055-34.523 0-63.824-22.773-74.269-54.25l-1.531.13-40.298 31.187-.527 1.465C35.393 231.798 79.49 261.1 130.55 261.1" fill="#34A853"></path>
+            <path d="M56.281 156.37c-2.756-8.123-4.351-16.827-4.351-25.82 0-8.994 1.595-17.697 4.206-25.82l-.073-1.73L15.26 71.312l-1.335.635C5.077 89.644 0 109.517 0 130.55s5.077 40.905 13.925 58.602l42.356-32.782" fill="#FBBC05"></path>
+            <path d="M130.55 50.479c24.514 0 41.05 10.589 50.479 19.438l36.844-35.974C195.245 12.91 165.798 0 130.55 0 79.49 0 35.393 29.301 13.925 71.947l42.211 32.783c10.59-31.477 39.891-54.251 74.414-54.251" fill="#EB4335"></path>
+          </svg>
+          המשך באמצעות Google
+        </button>
+      </div>
+    </header>
+
+    <div class="flex-1 overflow-y-auto bg-slate-50 relative w-full">
+        <!-- Render the imported Views -->
+        <?!= include('View_Dashboard'); ?>
+        <?!= include('View_BimCommander'); ?>
+        <?!= include('View_Settings'); ?>
+        <?!= include('View_ProjectDetails'); ?>
+    </div>
+  </main>
+
+  <!-- Modals -->
+  <div id="modal-add-contact" class="hidden fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
+    <div class="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
+      <div class="bg-slate-900 text-white p-4"><h3 id="modal-contact-title" class="font-bold text-sm uppercase tracking-wider">הוספת איש קשר לצוות</h3></div>
+      <div class="p-5 space-y-3">
+        <div><label class="text-xs text-slate-500 font-semibold block mb-1">שם איש קשר *</label><input type="text" id="new-contact-name" class="w-full text-xs border border-slate-200 rounded-lg p-2"></div>
+        <div><label class="text-xs text-slate-500 font-semibold block mb-1">תחום</label><input type="text" id="new-contact-disc" class="w-full text-xs border border-slate-200 rounded-lg p-2"></div>
+        <div><label class="text-xs text-slate-500 font-semibold block mb-1">תפקיד</label><input type="text" id="new-contact-role" class="w-full text-xs border border-slate-200 rounded-lg p-2"></div>
+        <div><label class="text-xs text-slate-500 font-semibold block mb-1">חברה</label><input type="text" id="new-contact-company" class="w-full text-xs border border-slate-200 rounded-lg p-2"></div>
+        <div><label class="text-xs text-slate-500 font-semibold block mb-1">דוא״ל</label><input type="email" id="new-contact-email" class="w-full text-xs border border-slate-200 rounded-lg p-2"></div>
+      </div>
+      <div class="bg-slate-50 border-t border-slate-100 px-5 py-3 flex justify-end gap-2">
+        <button type="button" onclick="document.getElementById('modal-add-contact').classList.add('hidden')" class="bg-slate-200 text-slate-700 text-xs px-4 py-1.5 rounded-lg">ביטול</button>
+        <button type="button" onclick="saveContactLocal()" id="btn-save-contact" class="bg-blue-600 text-white text-xs px-4 py-1.5 rounded-lg shadow-sm">הוספה מקומית</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-bdg-confirm" class="hidden fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-[9999]">
+    <div class="bg-white rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl">
+      <div class="bg-slate-900 text-white p-4"><h3 class="font-bold text-sm uppercase tracking-wider">אישור יצירת מסמכים</h3></div>
+      <div class="p-5">
+          <p class="text-sm text-slate-600 mb-4">הקבצים הבאים ייווצרו ויועתקו לתיקיית Drive של הפרויקט שנבחר:</p>
+          <div id="confirm-files-list" class="max-h-64 overflow-y-auto bg-slate-50 border border-slate-200 rounded-lg p-2 mb-4"></div>
+      </div>
+      <div class="bg-slate-50 border-t border-slate-100 px-5 py-3 flex justify-end gap-2">
+          <button type="button" onclick="document.getElementById('modal-bdg-confirm').classList.add('hidden')" class="bg-slate-200 text-slate-700 text-xs px-4 py-1.5 rounded-lg">ביטול</button>
+          <button type="button" onclick="executeBdgGeneration()" id="btn-exec-bdg" class="bg-blue-600 text-white text-xs px-4 py-1.5 rounded-lg shadow-sm">אישור וביצוע</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container" dir="rtl" class="fixed bottom-6 left-6 z-[9999] flex flex-col gap-3 pointer-events-none"></div>
+
+  <!-- The modular scripts are loaded here -->
+  <?!= include('Script_Global'); ?>
+  <?!= include('Script_Dashboard'); ?>
+  <?!= include('Script_ProjectDetails'); ?>
+  <?!= include('Script_Publish'); ?>
+  <?!= include('Script_PublishIntegration'); ?>
+  <?!= include('Script_ModelGovernance'); ?>
+  <?!= include('Script_Autodesk'); ?>
+  <?!= include('Script_CloudConnection'); ?>
+  <?!= include('Script_Contacts'); ?>
+  <?!= include('Script_MDC'); ?>
+  <?!= include('Script_ModelSchema'); ?>
+  <?!= include('Script_BimCommander'); ?>
+
+  <!-- ROBUST GOOGLE CONNECT SESSION MEMORY SCRIPT -->
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+        const loginBtn = document.getElementById("btn-login");
+
+        if (loginBtn) {
+            // 1. Check if user already clicked login in this session
+            if (sessionStorage.getItem("bimbot_user_logged_in") === "true") {
+                
+                // Immediately show "מתחבר..." visual state
+                loginBtn.innerHTML = '<svg class="animate-spin w-5 h-5 mr-3 text-blue-600" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span class="text-blue-600">מתחבר...</span>';
+                loginBtn.style.pointerEvents = "none";
+                loginBtn.classList.add("opacity-75");
+
+                // Check every 250ms if Google is fully awake, then native-execute the login function
+                let checkGoogle = setInterval(function() {
+                    if (typeof google !== "undefined" && google.script) {
+                        clearInterval(checkGoogle);
+                        
+                        // Fire the exact same function the button normally runs
+                        if (loginBtn.onclick) {
+                            loginBtn.onclick();
+                        } else if (typeof authenticateUser === "function") {
+                            authenticateUser();
+                        }
+                    }
+                }, 250);
+            }
+
+            // 2. Save session memory only when they explicitly click it
+            loginBtn.addEventListener("click", function() {
+                sessionStorage.setItem("bimbot_user_logged_in", "true");
+                
+                // Set visuals for manual click
+                loginBtn.innerHTML = '<svg class="animate-spin w-5 h-5 mr-3 text-blue-600" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span class="text-blue-600">מתחבר...</span>';
+                loginBtn.style.pointerEvents = "none";
+                loginBtn.classList.add("opacity-75");
+            });
+        }
+    });
+  </script>
+</body>
+</html>
